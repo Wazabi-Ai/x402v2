@@ -182,15 +182,17 @@ function initNavScrollEffect() {
   const nav = document.querySelector('.nav');
   let lastScroll = 0;
 
+  function getNavBg(scrolled) {
+    const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+    if (isLight) {
+      return scrolled ? 'rgba(245, 245, 247, 0.95)' : 'rgba(245, 245, 247, 0.85)';
+    }
+    return scrolled ? 'rgba(10, 10, 15, 0.95)' : 'rgba(10, 10, 15, 0.8)';
+  }
+
   window.addEventListener('scroll', () => {
     const currentScroll = window.pageYOffset;
-    
-    if (currentScroll > 100) {
-      nav.style.background = 'rgba(10, 10, 15, 0.95)';
-    } else {
-      nav.style.background = 'rgba(10, 10, 15, 0.8)';
-    }
-
+    nav.style.background = getNavBg(currentScroll > 100);
     lastScroll = currentScroll;
   });
 }
@@ -404,10 +406,49 @@ function initParticles() {
 }
 
 // ============================================================================
+// Theme Toggle
+// ============================================================================
+
+function initThemeToggle() {
+  const toggle = document.querySelector('.theme-toggle');
+  if (!toggle) return;
+
+  const STORAGE_KEY = 'x402-theme';
+
+  function getPreferredTheme() {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) return stored;
+    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  }
+
+  function setTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem(STORAGE_KEY, theme);
+  }
+
+  // Apply saved or system theme on load
+  setTheme(getPreferredTheme());
+
+  // Toggle on click
+  toggle.addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-theme');
+    setTheme(current === 'light' ? 'dark' : 'light');
+  });
+
+  // Listen for system preference changes
+  window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => {
+    if (!localStorage.getItem(STORAGE_KEY)) {
+      setTheme(e.matches ? 'light' : 'dark');
+    }
+  });
+}
+
+// ============================================================================
 // Initialize Everything
 // ============================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
+  initThemeToggle();
   initDemoTabs();
   initCopyButtons();
   initSmoothScroll();
@@ -415,7 +456,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initMobileNav();
   initScrollAnimations();
   initParticles();
-  
+
   // Typing animation disabled by default (can be uncommented)
   // initTypingAnimation();
 });
