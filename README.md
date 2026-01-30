@@ -2,7 +2,7 @@
 
 <div align="center">
 
-**Production-ready SDK for the x402 v2 Payment Protocol on BNB Smart Chain**
+**The Payment Rails for the Agent Economy — x402 Protocol SDK with Identity, ERC-4337 Wallets & Settlement**
 
 [![npm version](https://img.shields.io/npm/v/@wazabiai/x402)](https://www.npmjs.com/package/@wazabiai/x402)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -219,15 +219,6 @@ import {
 } from '@wazabiai/x402/chains';
 ```
 
-## Supported Tokens (BSC)
-
-| Token | Address | Decimals |
-|-------|---------|----------|
-| USDT  | `0x55d398326f99059fF775485246999027B3197955` | 18 |
-| USDC  | `0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d` | 18 |
-| BUSD  | `0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56` | 18 |
-| WBNB  | `0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c` | 18 |
-
 ## Protocol Details
 
 ### HTTP Headers
@@ -264,6 +255,132 @@ import {
   ]
 }
 ```
+
+## Facilitator (Agent Financial Platform)
+
+The Wazabi x402 Facilitator extends the SDK into a complete Agent Financial Platform with identity (handles), ERC-4337 smart wallets, and settlement with 0.5% fees.
+
+### Quick Start
+
+```typescript
+import { startFacilitator } from '@wazabiai/x402/facilitator';
+
+// Start the facilitator server
+startFacilitator(3000);
+// Endpoints: /register, /resolve, /balance, /history, /settle, /supported, /skill.md
+```
+
+### Integrate with Existing Express App
+
+```typescript
+import express from 'express';
+import { createFacilitator } from '@wazabiai/x402/facilitator';
+
+const app = express();
+app.use(express.json());
+createFacilitator(app);
+app.listen(3000);
+```
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/register` | POST | Create handle + deploy ERC-4337 smart wallet |
+| `/resolve/:handle` | GET | Handle to address lookup |
+| `/balance/:handle` | GET | Token balances across chains |
+| `/history/:handle` | GET | Transaction history |
+| `/profile/:handle` | GET | Full agent profile |
+| `/verify` | POST | Verify payment (x402 standard) |
+| `/settle` | POST | Execute payment + 0.5% fee |
+| `/supported` | GET | Networks, tokens, schemes |
+| `/skill.md` | GET | OpenClaw skill file |
+
+### Register an Agent
+
+```typescript
+// POST /register
+const response = await fetch('https://facilitator.wazabi.ai/register', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    handle: 'molty',
+    networks: ['eip155:56', 'eip155:8453'],
+  }),
+});
+
+// Response:
+// {
+//   "handle": "molty.wazabi-x402",
+//   "wallet": {
+//     "address": "0x7A3b...F9c2",
+//     "type": "ERC-4337",
+//     "deployed": { "eip155:56": false, "eip155:8453": false }
+//   },
+//   "session_key": {
+//     "public": "0xABC...",
+//     "private": "0xDEF...",  // returned ONCE
+//     "expires": "2027-01-30T00:00:00Z"
+//   }
+// }
+```
+
+### Settlement with Fee
+
+```typescript
+// POST /settle
+const result = await fetch('https://facilitator.wazabi.ai/settle', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    from: 'molty',
+    to: 'agent-b',
+    amount: '100.00',
+    token: 'USDC',
+    network: 'eip155:8453',
+  }),
+});
+
+// Response:
+// {
+//   "success": true,
+//   "tx_hash": "0xABC123...",
+//   "settlement": {
+//     "gross": "100.00",
+//     "fee": "0.50",       // 0.5% to Wazabi treasury
+//     "gas": "0.02",
+//     "net": "99.48"       // recipient receives
+//   }
+// }
+```
+
+### Handle Format
+
+Handles follow the format `<name>.wazabi-x402` (e.g., `molty.wazabi-x402`).
+
+- 3-50 characters, lowercase alphanumeric with hyphens/underscores
+- Resolves to an ERC-4337 smart wallet address identical on all supported chains
+
+### OpenClaw Skill Integration
+
+The facilitator serves an OpenClaw-compatible skill file at `/skill.md`. OpenClaw agents can gain payment capabilities by reading this skill.
+
+### Smart Contracts
+
+The following Solidity contracts are included in `contracts/`:
+
+| Contract | Description |
+|----------|-------------|
+| `WazabiAccount.sol` | ERC-4337 smart wallet with session key support |
+| `WazabiAccountFactory.sol` | CREATE2 factory for deterministic wallet addresses |
+| `WazabiPaymaster.sol` | Verifying paymaster for gasless USDC/USDT transactions |
+
+## Supported Networks
+
+| Network | Chain ID | Tokens |
+|---------|----------|--------|
+| BNB Chain | eip155:56 | USDT, USDC, BUSD, WBNB |
+| Base | eip155:8453 | USDC |
 
 ## Error Handling
 

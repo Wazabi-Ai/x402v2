@@ -1,7 +1,7 @@
 {
   "name": "@wazabiai/x402",
-  "version": "0.1.0",
-  "description": "Production-ready SDK for the x402 v2 Payment Protocol on BNB Smart Chain",
+  "version": "0.2.0",
+  "description": "x402 v2 Payment Protocol SDK — Agent Financial Platform with identity, ERC-4337 wallets, and settlement for BNB Chain & Base",
   "author": "Wazabi",
   "license": "MIT",
   "type": "module",
@@ -58,6 +58,16 @@
         "types": "./dist/chains/index.d.cts",
         "default": "./dist/chains/index.cjs"
       }
+    },
+    "./facilitator": {
+      "import": {
+        "types": "./dist/facilitator/index.d.ts",
+        "default": "./dist/facilitator/index.js"
+      },
+      "require": {
+        "types": "./dist/facilitator/index.d.cts",
+        "default": "./dist/facilitator/index.cjs"
+      }
     }
   },
   "files": [
@@ -85,10 +95,16 @@
     "crypto",
     "bnb",
     "bsc",
+    "base",
     "blockchain",
     "eip-712",
+    "erc-4337",
+    "account-abstraction",
     "http-402",
-    "web3"
+    "web3",
+    "agent-payments",
+    "openclaw",
+    "facilitator"
   ],
   "repository": {
     "type": "git",

@@ -7,6 +7,7 @@ export default defineConfig({
     'server/index': 'src/server/index.ts',
     'types/index': 'src/types/index.ts',
     'chains/index': 'src/chains/index.ts',
+    'facilitator/index': 'src/facilitator/index.ts',
   },
   format: ['esm', 'cjs'],
   dts: true,
@@ -15,7 +16,7 @@ export default defineConfig({
   sourcemap: true,
   minify: false,
   treeshake: true,
-  external: ['express', 'viem'],
+  external: ['express', 'viem', 'crypto'],
   esbuildOptions(options) {
     options.banner = {
       js: '/* @wazabiai/x402 - x402 v2 Payment Protocol SDK */',
