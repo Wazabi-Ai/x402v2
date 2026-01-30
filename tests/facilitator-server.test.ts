@@ -378,7 +378,7 @@ describe('Facilitator Server', () => {
       expect(res._statusCode).toBe(400);
     });
 
-    it('should reject unknown sender', async () => {
+    it('should reject unknown sender handle', async () => {
       const route = findRoute(routes, 'POST', '/settle')!;
       const res = createMockResponse();
 
@@ -394,6 +394,53 @@ describe('Facilitator Server', () => {
       );
 
       expect(res._statusCode).toBe(404);
+    });
+
+    it('should accept unregistered raw address as sender', async () => {
+      const route = findRoute(routes, 'POST', '/settle')!;
+      const res = createMockResponse();
+
+      await route.handler(
+        {
+          body: {
+            from: '0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+            to: 'agent-b',
+            amount: '10.00',
+            token: 'USDC',
+            network: 'eip155:8453',
+          },
+        },
+        res
+      );
+
+      expect(res._statusCode).toBe(200);
+      const body = res._body as Record<string, unknown>;
+      expect(body).toHaveProperty('success', true);
+      expect(body).toHaveProperty('from', '0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef');
+    });
+
+    it('should settle between two raw addresses without registration', async () => {
+      const route = findRoute(routes, 'POST', '/settle')!;
+      const res = createMockResponse();
+
+      await route.handler(
+        {
+          body: {
+            from: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            to: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            amount: '50.00',
+            token: 'USDC',
+            network: 'eip155:56',
+          },
+        },
+        res
+      );
+
+      expect(res._statusCode).toBe(200);
+      const body = res._body as Record<string, unknown>;
+      expect(body).toHaveProperty('success', true);
+      expect(body).toHaveProperty('from', '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+      expect(body).toHaveProperty('to', '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
     });
   });
 

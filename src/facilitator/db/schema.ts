@@ -151,13 +151,19 @@ export class InMemoryStore {
   }
 
   async getTransactionsByHandle(
-    handle: string,
+    handleOrAddress: string,
     limit: number = 20,
     offset: number = 0
   ): Promise<{ transactions: Transaction[]; total: number }> {
-    const fullHandle = handle.endsWith('.wazabi-x402') ? handle : `${handle}.wazabi-x402`;
+    // Support both handle lookups and raw address lookups
+    const isRawAddress = /^0x[a-fA-F0-9]{40}$/.test(handleOrAddress);
+    const identifier = isRawAddress
+      ? handleOrAddress
+      : handleOrAddress.endsWith('.wazabi-x402')
+        ? handleOrAddress
+        : `${handleOrAddress}.wazabi-x402`;
     const filtered = this.transactions.filter(
-      tx => tx.from_handle === fullHandle || tx.to_address === fullHandle
+      tx => tx.from_handle === identifier || tx.to_address === identifier
     );
     const sorted = filtered.sort(
       (a, b) => b.created_at.getTime() - a.created_at.getTime()

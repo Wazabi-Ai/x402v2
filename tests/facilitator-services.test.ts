@@ -517,7 +517,7 @@ describe('SettlementService', () => {
       expect(result.settlement.fee).toBe('0.50');
     });
 
-    it('should reject unknown sender', async () => {
+    it('should reject unknown sender handle', async () => {
       await expect(
         settlementService.settle({
           from: 'unknown-agent',
@@ -554,6 +554,56 @@ describe('SettlementService', () => {
       expect(result.to).toBe('0x1234567890abcdef1234567890abcdef12345678');
     });
 
+    it('should accept unregistered sender address (no registration required)', async () => {
+      const rawAddress = '0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+      const result = await settlementService.settle({
+        from: rawAddress,
+        to: 'agent-b',
+        amount: '25.00',
+        token: 'USDC',
+        network: 'eip155:8453',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.from).toBe(rawAddress); // Raw address used as identifier
+      expect(result.settlement.fee).toBe('0.13'); // 0.5% of 25
+    });
+
+    it('should settle between two raw addresses (fully unregistered)', async () => {
+      const sender = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      const recipient = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+      const result = await settlementService.settle({
+        from: sender,
+        to: recipient,
+        amount: '50.00',
+        token: 'USDC',
+        network: 'eip155:56',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.from).toBe(sender);
+      expect(result.to).toBe(recipient);
+      expect(result.settlement.fee).toBe('0.25');
+    });
+
+    it('should resolve registered address to handle in response', async () => {
+      // Get molty's wallet address
+      const resolved = await handleService.resolve('molty');
+      const moltyAddress = resolved!.address;
+
+      const result = await settlementService.settle({
+        from: moltyAddress,
+        to: 'agent-b',
+        amount: '10.00',
+        token: 'USDC',
+        network: 'eip155:8453',
+      });
+
+      expect(result.success).toBe(true);
+      // When using a registered address, response should show the handle
+      expect(result.from).toBe('molty.wazabi-x402');
+    });
+
     it('should record transaction in store', async () => {
       await settlementService.settle({
         from: 'molty',
@@ -585,10 +635,33 @@ describe('SettlementService', () => {
       expect(history.transactions[0]?.amount).toBe('10.00');
     });
 
-    it('should throw for unknown handle', async () => {
+    it('should throw for unknown non-address string', async () => {
       await expect(
         settlementService.getHistory('unknown')
       ).rejects.toThrow('not found');
+    });
+
+    it('should return empty history for unregistered address', async () => {
+      const addr = '0xcccccccccccccccccccccccccccccccccccccccc';
+      const history = await settlementService.getHistory(addr);
+      expect(history.address).toBe(addr);
+      expect(history.transactions).toHaveLength(0);
+    });
+
+    it('should return history for unregistered address after settlement', async () => {
+      const addr = '0xdddddddddddddddddddddddddddddddddddddddd';
+      await settlementService.settle({
+        from: addr,
+        to: 'agent-b',
+        amount: '15.00',
+        token: 'USDC',
+        network: 'eip155:8453',
+      });
+
+      const history = await settlementService.getHistory(addr);
+      expect(history.address).toBe(addr);
+      expect(history.transactions).toHaveLength(1);
+      expect(history.transactions[0]?.type).toBe('payment_sent');
     });
 
     it('should support pagination', async () => {
@@ -611,7 +684,7 @@ describe('SettlementService', () => {
   });
 
   describe('verifyPayment', () => {
-    it('should verify a registered sender', async () => {
+    it('should verify a registered sender by handle', async () => {
       const result = await settlementService.verifyPayment({
         from: 'molty',
         amount: '10.00',
@@ -621,9 +694,10 @@ describe('SettlementService', () => {
 
       expect(result.valid).toBe(true);
       expect(result.signer).toBeDefined();
+      expect(result.registered).toBe(true);
     });
 
-    it('should return invalid for unknown sender', async () => {
+    it('should return invalid for unknown handle', async () => {
       const result = await settlementService.verifyPayment({
         from: 'unknown',
         amount: '10.00',
@@ -632,7 +706,36 @@ describe('SettlementService', () => {
       });
 
       expect(result.valid).toBe(false);
-      expect(result.error).toBe('Sender not found');
+      expect(result.error).toContain('not found');
+    });
+
+    it('should verify an unregistered raw address (no registration needed)', async () => {
+      const result = await settlementService.verifyPayment({
+        from: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+        amount: '10.00',
+        token: 'USDC',
+        network: 'eip155:8453',
+      });
+
+      expect(result.valid).toBe(true);
+      expect(result.registered).toBe(false);
+      expect(result.signer).toBe('0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee');
+      // No balance info for unregistered addresses
+      expect(result.balanceSufficient).toBeUndefined();
+    });
+
+    it('should verify registered address and include balance info', async () => {
+      const resolved = await handleService.resolve('molty');
+      const result = await settlementService.verifyPayment({
+        from: resolved!.address,
+        amount: '10.00',
+        token: 'USDC',
+        network: 'eip155:8453',
+      });
+
+      expect(result.valid).toBe(true);
+      expect(result.registered).toBe(true);
+      expect(result.balanceSufficient).toBeDefined();
     });
   });
 

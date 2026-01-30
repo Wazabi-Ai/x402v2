@@ -361,9 +361,7 @@ export function createFacilitator(
       res.json(result);
     } catch (error) {
       if (error instanceof SettlementError) {
-        const statusCode = error.code === 'SENDER_NOT_FOUND' || error.code === 'RECIPIENT_NOT_FOUND'
-          ? 404
-          : 400;
+        const statusCode = error.code === 'HANDLE_NOT_FOUND' ? 404 : 400;
         res.status(statusCode).json({
           error: error.code,
           message: error.message,
