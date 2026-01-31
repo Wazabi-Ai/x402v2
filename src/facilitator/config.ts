@@ -1,7 +1,6 @@
 import { privateKeyToAccount } from 'viem/accounts';
 import { createWalletClient, createPublicClient, http, type PublicClient, type WalletClient, type Chain } from 'viem';
-import { bsc } from 'viem/chains';
-import { base } from 'viem/chains';
+import { bsc, base } from 'viem/chains';
 
 // Load and validate environment configuration
 export interface FacilitatorEnvConfig {
@@ -74,7 +73,6 @@ export function loadConfig(): FacilitatorEnvConfig {
     portalDir: process.env['PORTAL_DIR'],
   };
 }
-
 
 function requireEnv(name: string): string {
   const value = process.env[name];

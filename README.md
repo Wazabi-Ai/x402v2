@@ -465,9 +465,3 @@ X402_PRIVATE_KEY=0x...  # Used by createX402ClientFromEnv()
 ## License
 
 MIT © Wazabi
-
----
-
-<div align="center">
-  <sub>Built with ❤️ for the decentralized web</sub>
-</div>

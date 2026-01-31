@@ -459,10 +459,9 @@ export {
   type SignedPayment,
   type PaymentVerificationResult,
   X402_HEADERS,
+  PaymentVerificationError,
+  PaymentExpiredError,
 } from '../types/index.js';
-
-// Re-export error classes
-export { PaymentVerificationError, PaymentExpiredError } from '../types/index.js';
 
 export {
   BSC_CAIP_ID,

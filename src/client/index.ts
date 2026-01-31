@@ -28,7 +28,7 @@ import {
   generateNonce,
   calculateDeadline,
 } from '../types/index.js';
-import { BSC_CAIP_ID, BSC_CHAIN_ID, BSC_DEFAULT_RPC, BSC_USDT, BSC_USDC, BSC_TOKENS } from '../chains/bnb.js';
+import { BSC_CAIP_ID, BSC_DEFAULT_RPC } from '../chains/bnb.js';
 
 // ============================================================================
 // X402 Client Class
@@ -368,10 +368,8 @@ export {
   PaymentRequiredError,
   PaymentVerificationError,
   UnsupportedNetworkError,
+  PaymentExpiredError,
 } from '../types/index.js';
-
-// Re-export error types
-export { PaymentExpiredError } from '../types/index.js';
 
 export {
   BSC_CAIP_ID,
@@ -379,4 +377,4 @@ export {
   BSC_USDT,
   BSC_USDC,
   BSC_TOKENS,
-};
+} from '../chains/bnb.js';

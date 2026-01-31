@@ -29,7 +29,7 @@ import { loadConfig, createClients } from '../facilitator/config.js';
 const config = loadConfig();
 const { publicClients, walletClients } = createClients(config);
 
-const portalDir = resolve(config.portalDir || process.env['PORTAL_DIR'] || 'facilitator-portal');
+const portalDir = resolve(config.portalDir || 'facilitator-portal');
 
 startFacilitator(config.port, {
   portalDir,

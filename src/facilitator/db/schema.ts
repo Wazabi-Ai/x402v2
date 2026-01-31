@@ -83,12 +83,6 @@ ${CREATE_TRANSACTIONS_TABLE}
 import type { Agent, AgentBalance, Transaction } from '../types.js';
 
 // ============================================================================
-// Transaction Status Type
-// ============================================================================
-
-export type TransactionStatus = 'pending' | 'confirmed' | 'failed';
-
-// ============================================================================
 // DataStore Interface
 // ============================================================================
 
@@ -110,7 +104,7 @@ export interface DataStore {
   updateAgent(id: string, updates: Partial<Agent>): Promise<Agent | null>;
 
   // Balances
-  getBalance(agentId: string): Promise<AgentBalance[]>;
+  getBalances(agentId: string): Promise<AgentBalance[]>;
   setBalance(agentId: string, balances: AgentBalance[]): Promise<void>;
   updateBalance(agentId: string, network: string, token: string, amount: string): Promise<void>;
 
@@ -146,10 +140,6 @@ export class InMemoryStore implements DataStore {
   }
 
   async getAgent(id: string): Promise<Agent | null> {
-    return this.agents.get(id) ?? null;
-  }
-
-  async getAgentById(id: string): Promise<Agent | null> {
     return this.agents.get(id) ?? null;
   }
 
@@ -201,10 +191,6 @@ export class InMemoryStore implements DataStore {
   // --- Balances ---
 
   async getBalances(agentId: string): Promise<AgentBalance[]> {
-    return this.balances.get(agentId) ?? [];
-  }
-
-  async getBalance(agentId: string): Promise<AgentBalance[]> {
     return this.balances.get(agentId) ?? [];
   }
 
@@ -306,19 +292,8 @@ export class InMemoryStore implements DataStore {
     limit: number = 20,
     offset: number = 0,
   ): Promise<Transaction[]> {
-    const isRawAddress = /^0x[a-fA-F0-9]{40}$/.test(handle);
-    const identifier = isRawAddress
-      ? handle
-      : handle.endsWith('.wazabi-x402')
-        ? handle
-        : `${handle}.wazabi-x402`;
-    const filtered = this.transactions.filter(
-      tx => tx.from_handle === identifier || tx.to_address === identifier,
-    );
-    const sorted = filtered.sort(
-      (a, b) => b.created_at.getTime() - a.created_at.getTime(),
-    );
-    return sorted.slice(offset, offset + limit);
+    const { transactions } = await this.getTransactionsByHandle(handle, limit, offset);
+    return transactions;
   }
 
   async updateTransactionStatus(
