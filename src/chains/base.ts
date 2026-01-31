@@ -128,3 +128,47 @@ export function getBaseTxUrl(txHash: string): string {
 export function getBaseAddressUrl(address: string): string {
   return `${BASE_BLOCK_EXPLORER}/address/${address}`;
 }
+
+/**
+ * Get BaseScan URL for a token
+ */
+export function getBaseTokenUrl(tokenAddress: string): string {
+  return `${BASE_BLOCK_EXPLORER}/token/${tokenAddress}`;
+}
+
+/**
+ * Format token amount from smallest unit to human-readable string (Base tokens)
+ */
+export function formatBaseTokenAmount(
+  amount: bigint | string,
+  tokenAddress: string
+): string {
+  const token = getBaseTokenByAddress(tokenAddress);
+  const decimals = token?.decimals ?? 6;
+  const amountBigInt = typeof amount === 'string' ? BigInt(amount) : amount;
+
+  const divisor = BigInt(10 ** decimals);
+  const wholePart = amountBigInt / divisor;
+  const fractionalPart = amountBigInt % divisor;
+
+  const fractionalStr = fractionalPart.toString().padStart(decimals, '0');
+  const trimmedFractional = fractionalStr.replace(/0+$/, '').padEnd(2, '0');
+
+  return `${wholePart}.${trimmedFractional}`;
+}
+
+/**
+ * Parse human-readable amount to smallest unit (Base tokens)
+ */
+export function parseBaseTokenAmount(
+  amount: string,
+  tokenAddress: string
+): bigint {
+  const token = getBaseTokenByAddress(tokenAddress);
+  const decimals = token?.decimals ?? 6;
+
+  const [whole, fractional = ''] = amount.split('.');
+  const paddedFractional = fractional.padEnd(decimals, '0').slice(0, decimals);
+
+  return BigInt(whole + paddedFractional);
+}

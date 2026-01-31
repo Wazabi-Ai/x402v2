@@ -1,17 +1,20 @@
 // Re-export all chain configurations
 export * from './bnb.js';
 export * from './base.js';
+export * from './ethereum.js';
 
 // Export a registry of all supported networks
 import { BSC_NETWORK_CONFIG, BSC_CAIP_ID } from './bnb.js';
 import { BASE_NETWORK_CONFIG, BASE_CAIP_ID } from './base.js';
+import { ETH_NETWORK_CONFIG, ETH_CAIP_ID } from './ethereum.js';
 import type { NetworkConfig, TokenConfig } from '../types/index.js';
 
 /**
  * Registry of all supported networks
- * BNB Smart Chain + Base (Coinbase L2)
+ * Ethereum Mainnet + BNB Smart Chain + Base (Coinbase L2)
  */
 export const SUPPORTED_NETWORKS: Record<string, NetworkConfig> = {
+  [ETH_CAIP_ID]: ETH_NETWORK_CONFIG,
   [BSC_CAIP_ID]: BSC_NETWORK_CONFIG,
   [BASE_CAIP_ID]: BASE_NETWORK_CONFIG,
 } as const;

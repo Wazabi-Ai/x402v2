@@ -83,12 +83,6 @@ ${CREATE_TRANSACTIONS_TABLE}
 import type { Agent, AgentBalance, Transaction } from '../types.js';
 
 // ============================================================================
-// Transaction Status Type
-// ============================================================================
-
-export type TransactionStatus = 'pending' | 'confirmed' | 'failed';
-
-// ============================================================================
 // DataStore Interface
 // ============================================================================
 
@@ -105,12 +99,14 @@ export interface DataStore {
   getAgent(id: string): Promise<Agent | null>;
   getAgentByHandle(handle: string): Promise<Agent | null>;
   getAgentByWallet(wallet: string): Promise<Agent | null>;
+  handleExists(handle: string): Promise<boolean>;
   getAllAgents(): Promise<Agent[]>;
   getAgentCount(): Promise<number>;
   updateAgent(id: string, updates: Partial<Agent>): Promise<Agent | null>;
 
   // Balances
-  getBalance(agentId: string): Promise<AgentBalance[]>;
+  getBalances(agentId: string): Promise<AgentBalance[]>;
+  setBalance(balance: AgentBalance): Promise<void>;
   setBalance(agentId: string, balances: AgentBalance[]): Promise<void>;
   updateBalance(agentId: string, network: string, token: string, amount: string): Promise<void>;
 
@@ -118,8 +114,9 @@ export interface DataStore {
   createTransaction(tx: Transaction): Promise<Transaction>;
   getTransaction(id: string): Promise<Transaction | null>;
   updateTransactionStatus(id: string, status: string, txHash?: string): Promise<void>;
+  getTransactionsByHandle(handleOrAddress: string, limit?: number, offset?: number): Promise<{ transactions: Transaction[]; total: number }>;
   getTransactionHistory(handle: string, limit?: number, offset?: number): Promise<Transaction[]>;
-  getTransactionCount(): Promise<number>;
+  getTransactionCount(handle?: string): Promise<number>;
 }
 
 // ============================================================================
@@ -146,10 +143,6 @@ export class InMemoryStore implements DataStore {
   }
 
   async getAgent(id: string): Promise<Agent | null> {
-    return this.agents.get(id) ?? null;
-  }
-
-  async getAgentById(id: string): Promise<Agent | null> {
     return this.agents.get(id) ?? null;
   }
 
@@ -201,10 +194,6 @@ export class InMemoryStore implements DataStore {
   // --- Balances ---
 
   async getBalances(agentId: string): Promise<AgentBalance[]> {
-    return this.balances.get(agentId) ?? [];
-  }
-
-  async getBalance(agentId: string): Promise<AgentBalance[]> {
     return this.balances.get(agentId) ?? [];
   }
 
@@ -306,19 +295,8 @@ export class InMemoryStore implements DataStore {
     limit: number = 20,
     offset: number = 0,
   ): Promise<Transaction[]> {
-    const isRawAddress = /^0x[a-fA-F0-9]{40}$/.test(handle);
-    const identifier = isRawAddress
-      ? handle
-      : handle.endsWith('.wazabi-x402')
-        ? handle
-        : `${handle}.wazabi-x402`;
-    const filtered = this.transactions.filter(
-      tx => tx.from_handle === identifier || tx.to_address === identifier,
-    );
-    const sorted = filtered.sort(
-      (a, b) => b.created_at.getTime() - a.created_at.getTime(),
-    );
-    return sorted.slice(offset, offset + limit);
+    const { transactions } = await this.getTransactionsByHandle(handle, limit, offset);
+    return transactions;
   }
 
   async updateTransactionStatus(
@@ -349,23 +327,4 @@ export class InMemoryStore implements DataStore {
       tx => tx.from_handle === fullHandle || tx.to_address === fullHandle,
     ).length;
   }
-}
-
-// ============================================================================
-// Store Factory
-// ============================================================================
-
-/**
- * Create a DataStore instance.
- *
- * If a `databaseUrl` is provided the factory will eventually return a
- * PostgreSQL-backed store.  Until the driver is implemented it falls back
- * to InMemoryStore with a warning.
- */
-export function createStore(databaseUrl?: string): DataStore {
-  if (databaseUrl) {
-    console.warn('[db] PostgreSQL URL provided but driver not yet implemented. Using in-memory store.');
-    // TODO: Implement PostgreSQL store
-  }
-  return new InMemoryStore();
 }

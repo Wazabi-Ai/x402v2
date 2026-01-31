@@ -29,6 +29,51 @@ import {
 } from '../chains/bnb.js';
 
 // ============================================================================
+// Nonce Registry (replay protection)
+// ============================================================================
+
+/**
+ * In-memory nonce registry that prevents replay attacks by tracking used
+ * nonces. Entries are automatically evicted after `ttlMs` (default: 10 min).
+ *
+ * For production at scale, replace with a Redis SET + TTL.
+ */
+class NonceRegistry {
+  private readonly used = new Map<string, number>(); // nonce -> expiry timestamp (ms)
+  private readonly ttlMs: number;
+  private sweepTimer: ReturnType<typeof setInterval> | null = null;
+
+  constructor(ttlMs = 10 * 60 * 1000) {
+    this.ttlMs = ttlMs;
+  }
+
+  /** Returns false if the nonce was already seen (replay). */
+  claim(nonce: string): boolean {
+    this.lazyStartSweep();
+    if (this.used.has(nonce)) return false;
+    this.used.set(nonce, Date.now() + this.ttlMs);
+    return true;
+  }
+
+  /** Lazily start the cleanup interval (avoids timer in tests that don't need it). */
+  private lazyStartSweep() {
+    if (this.sweepTimer) return;
+    this.sweepTimer = setInterval(() => {
+      const now = Date.now();
+      for (const [nonce, expiry] of this.used) {
+        if (expiry < now) this.used.delete(nonce);
+      }
+    }, 60_000);
+    // Allow Node.js to exit even if the timer is running
+    if (this.sweepTimer && typeof this.sweepTimer === 'object' && 'unref' in this.sweepTimer) {
+      this.sweepTimer.unref();
+    }
+  }
+}
+
+const nonceRegistry = new NonceRegistry();
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -228,10 +273,8 @@ export function x402Middleware(config: X402MiddlewareConfig): RequestHandler {
       }
 
       // Get payment signature header
-      const signatureHeader = req.headers[X402_HEADERS.PAYMENT_SIGNATURE] ||
-                              req.headers[X402_HEADERS.PAYMENT_SIGNATURE.toLowerCase()];
-      const payloadHeader = req.headers[X402_HEADERS.PAYMENT_PAYLOAD] ||
-                            req.headers[X402_HEADERS.PAYMENT_PAYLOAD.toLowerCase()];
+      const signatureHeader = req.headers[X402_HEADERS.PAYMENT_SIGNATURE];
+      const payloadHeader = req.headers[X402_HEADERS.PAYMENT_PAYLOAD];
 
       // If no payment signature, return 402
       if (!signatureHeader) {
@@ -324,6 +367,15 @@ export function x402Middleware(config: X402MiddlewareConfig): RequestHandler {
           });
           return;
         }
+      }
+
+      // Replay protection: ensure this nonce hasn't been used before
+      if (!nonceRegistry.claim(payload.nonce)) {
+        res.status(402).json({
+          error: 'Replay Detected',
+          message: 'This payment nonce has already been used',
+        });
+        return;
       }
 
       // Check amount matches
@@ -421,10 +473,8 @@ export async function verifyPayment(
  */
 export function parsePaymentFromRequest(req: Request): SignedPayment | null {
   try {
-    const signatureHeader = req.headers[X402_HEADERS.PAYMENT_SIGNATURE] ||
-                            req.headers[X402_HEADERS.PAYMENT_SIGNATURE.toLowerCase()];
-    const payloadHeader = req.headers[X402_HEADERS.PAYMENT_PAYLOAD] ||
-                          req.headers[X402_HEADERS.PAYMENT_PAYLOAD.toLowerCase()];
+    const signatureHeader = req.headers[X402_HEADERS.PAYMENT_SIGNATURE];
+    const payloadHeader = req.headers[X402_HEADERS.PAYMENT_PAYLOAD];
 
     if (!signatureHeader || !payloadHeader) {
       return null;
@@ -459,10 +509,9 @@ export {
   type SignedPayment,
   type PaymentVerificationResult,
   X402_HEADERS,
+  PaymentVerificationError,
+  PaymentExpiredError,
 } from '../types/index.js';
-
-// Re-export error classes
-export { PaymentVerificationError, PaymentExpiredError } from '../types/index.js';
 
 export {
   BSC_CAIP_ID,

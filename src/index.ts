@@ -1,5 +1,5 @@
 /**
- * @wazabiai/x402 - x402 v2 Payment Protocol SDK for BNB Smart Chain & Base
+ * @wazabiai/x402 - x402 v2 Payment Protocol SDK for Ethereum, BNB Smart Chain & Base
  *
  * Complete Agent Financial Platform with identity (handles),
  * smart wallets (ERC-4337), and settlement (0.5% fee).

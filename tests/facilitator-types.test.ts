@@ -33,10 +33,11 @@ describe('Facilitator Constants', () => {
     expect(SETTLEMENT_FEE_BPS).toBe(50);
   });
 
-  it('should support BNB Chain and Base', () => {
+  it('should support Ethereum, BNB Chain, and Base', () => {
+    expect(AGENT_SUPPORTED_NETWORKS).toContain('eip155:1');
     expect(AGENT_SUPPORTED_NETWORKS).toContain('eip155:56');
     expect(AGENT_SUPPORTED_NETWORKS).toContain('eip155:8453');
-    expect(AGENT_SUPPORTED_NETWORKS).toHaveLength(2);
+    expect(AGENT_SUPPORTED_NETWORKS).toHaveLength(3);
   });
 });
 
@@ -133,7 +134,7 @@ describe('RegisterRequestSchema', () => {
     const result = RegisterRequestSchema.safeParse({ handle: 'molty' });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.networks).toEqual(['eip155:56', 'eip155:8453']);
+      expect(result.data.networks).toEqual(['eip155:1', 'eip155:56', 'eip155:8453']);
     }
   });
 

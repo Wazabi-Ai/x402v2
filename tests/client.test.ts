@@ -25,7 +25,9 @@ vi.mock('viem/accounts', () => ({
 }));
 
 vi.mock('viem/chains', () => ({
+  mainnet: { id: 1, name: 'Ethereum' },
   bsc: { id: 56, name: 'BSC' },
+  base: { id: 8453, name: 'Base' },
 }));
 
 import {

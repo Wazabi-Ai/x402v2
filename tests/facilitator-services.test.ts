@@ -51,7 +51,7 @@ describe('InMemoryStore', () => {
 
     it('should create and retrieve agent by ID', async () => {
       await store.createAgent(testAgent);
-      const agent = await store.getAgentById('test-id-1');
+      const agent = await store.getAgent('test-id-1');
       expect(agent).toBeDefined();
       expect(agent?.handle).toBe('molty');
     });
@@ -104,7 +104,7 @@ describe('InMemoryStore', () => {
     });
 
     it('should return null for non-existent agent', async () => {
-      expect(await store.getAgentById('non-existent')).toBeNull();
+      expect(await store.getAgent('non-existent')).toBeNull();
       expect(await store.getAgentByHandle('non-existent')).toBeNull();
       expect(await store.getAgentByWallet('0x0000000000000000000000000000000000000000')).toBeNull();
     });

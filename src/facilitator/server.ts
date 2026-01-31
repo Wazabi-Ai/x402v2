@@ -27,6 +27,7 @@ import { WalletService } from './services/wallet.js';
 import {
   RegisterRequestSchema,
   SettleRequestSchema,
+  VerifyRequestSchema,
   HANDLE_SUFFIX,
   SETTLEMENT_FEE_RATE,
   SETTLEMENT_FEE_BPS,
@@ -353,27 +354,17 @@ export function createFacilitator(
 
   app.post('/verify', async (req: Request, res: Response) => {
     try {
-      const { from, amount, token, network } = req.body as {
-        from?: string;
-        amount?: string;
-        token?: string;
-        network?: string;
-      };
-
-      if (!from || !amount) {
+      const parsed = VerifyRequestSchema.safeParse(req.body);
+      if (!parsed.success) {
         res.status(400).json({
           error: 'INVALID_REQUEST',
-          message: 'from and amount are required',
+          message: parsed.error.issues.map(i => i.message).join('; '),
+          details: parsed.error.issues,
         });
         return;
       }
 
-      const result = await settlementService.verifyPayment({
-        from,
-        amount,
-        token: token ?? 'USDC',
-        network: network ?? 'eip155:8453',
-      });
+      const result = await settlementService.verifyPayment(parsed.data);
 
       res.json(result);
     } catch (error) {
@@ -484,7 +475,7 @@ const SKILL_MD_CONTENT = `# Wazabi x402 Payment Skill
 
 ## Description
 Enable your agent to send and receive payments using the Wazabi x402 protocol.
-Provides ERC-4337 smart wallet with gasless transactions on BNB Chain and Base.
+Provides ERC-4337 smart wallet with gasless transactions on Ethereum, BNB Chain, and Base.
 
 ## Setup
 To activate this skill, tell your agent:
@@ -504,7 +495,7 @@ https://facilitator.wazabi.ai
 POST /register
 {
   "handle": "<desired-handle>",
-  "networks": ["eip155:56", "eip155:8453"]
+  "networks": ["eip155:1", "eip155:56", "eip155:8453"]
 }
 \`\`\`
 Returns: wallet address, session key (store securely)
@@ -546,7 +537,8 @@ When encountering an HTTP 402 response:
 5. Retry original request
 
 ## Supported Networks
-- BNB Chain (eip155:56): USDT, USDC
+- Ethereum (eip155:1): USDC, USDT, WETH
+- BNB Chain (eip155:56): USDT, USDC, WBNB
 - Base (eip155:8453): USDC
 
 ## Handle Format

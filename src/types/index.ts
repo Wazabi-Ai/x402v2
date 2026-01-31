@@ -30,7 +30,7 @@ export const X402_HEADERS = {
 /**
  * Supported token symbol types
  */
-export type TokenSymbol = 'USDT' | 'USDC' | 'BNB' | 'BUSD';
+export type TokenSymbol = 'USDT' | 'USDC' | 'BNB' | 'WETH' | 'ETH';
 
 /**
  * Token configuration for a specific blockchain
@@ -106,16 +106,6 @@ export type PaymentRequirement = z.infer<typeof PaymentRequirementSchema>;
 // ============================================================================
 // EIP-712 Payment Payload Types
 // ============================================================================
-
-/**
- * EIP-712 Domain structure for x402 protocol
- */
-export interface X402Domain {
-  name: typeof X402_DOMAIN_NAME;
-  version: string;
-  chainId: number;
-  verifyingContract?: `0x${string}`;
-}
 
 /**
  * Zod schema for PaymentPayload validation
@@ -360,18 +350,8 @@ export class PaymentExpiredError extends X402Error {
 }
 
 // ============================================================================
-// Utility Types
+// Utility Functions
 // ============================================================================
-
-/**
- * Hex string type (0x prefixed)
- */
-export type HexString = `0x${string}`;
-
-/**
- * Address type (0x prefixed, 40 hex chars)
- */
-export type Address = `0x${string}`;
 
 /**
  * Extract chain ID from CAIP-2 identifier
@@ -392,17 +372,21 @@ export function createCaipId(chainId: number): string {
 }
 
 /**
- * Generate a random nonce
+ * Generate a cryptographically secure random nonce
  */
 export function generateNonce(): string {
   const bytes = new Uint8Array(16);
-  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-    crypto.getRandomValues(bytes);
+  // globalThis.crypto is available in Node.js >= 19 and all modern browsers.
+  // For Node.js 18 (the minimum supported version) it is also available via
+  // the Web Crypto API polyfill that ships with the runtime.
+  if (typeof globalThis.crypto !== 'undefined' && globalThis.crypto.getRandomValues) {
+    globalThis.crypto.getRandomValues(bytes);
   } else {
-    // Fallback for Node.js without Web Crypto
-    for (let i = 0; i < bytes.length; i++) {
-      bytes[i] = Math.floor(Math.random() * 256);
-    }
+    // Node.js < 19 fallback: import from node:crypto
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const nodeCrypto = require('node:crypto') as typeof import('node:crypto');
+    const buf = nodeCrypto.randomBytes(16);
+    bytes.set(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength));
   }
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, '0'))

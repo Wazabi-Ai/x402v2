@@ -22,7 +22,7 @@ import {
   parsePaymentFromRequest,
   type X402Request,
 } from '../src/server/index.js';
-import { X402_HEADERS, X402_VERSION } from '../src/types/index.js';
+import { X402_HEADERS, X402_VERSION, generateNonce } from '../src/types/index.js';
 import { BSC_USDT, BSC_CAIP_ID, BSC_CHAIN_ID } from '../src/chains/bnb.js';
 
 // ============================================================================
@@ -152,7 +152,7 @@ describe('verifyPayment', () => {
       payTo: '0x742d35Cc6634C0532925a3b844Bc9e7595f4b123',
       payer: '0xABC123def456789012345678901234567890abcd',
       deadline: Math.floor(Date.now() / 1000) + 300,
-      nonce: 'testnonce123',
+      nonce: generateNonce(),
       resource: '/api/resource',
     },
     signature: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab' as `0x${string}`,
@@ -342,7 +342,7 @@ describe('parsePaymentFromRequest', () => {
     payTo: '0x742d35Cc6634C0532925a3b844Bc9e7595f4b123',
     payer: '0xABC123def456789012345678901234567890abcd',
     deadline: Math.floor(Date.now() / 1000) + 300,
-    nonce: 'testnonce123',
+    nonce: generateNonce(),
   };
 
   const validSignature = '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab';
@@ -516,19 +516,20 @@ describe('x402Middleware', () => {
   });
 
   describe('with valid payment', () => {
-    const validPayload = {
-      amount: '1000000000000000000',
-      token: BSC_USDT.address,
-      chainId: BSC_CHAIN_ID,
-      payTo: recipientAddress,
-      payer: '0xABC123def456789012345678901234567890abcd',
-      deadline: Math.floor(Date.now() / 1000) + 300,
-      nonce: 'testnonce123',
-      resource: '/api/resource',
-    };
     const validSignature = '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab';
+    let validPayload: Record<string, unknown>;
 
     beforeEach(() => {
+      validPayload = {
+        amount: '1000000000000000000',
+        token: BSC_USDT.address,
+        chainId: BSC_CHAIN_ID,
+        payTo: recipientAddress,
+        payer: '0xABC123def456789012345678901234567890abcd',
+        deadline: Math.floor(Date.now() / 1000) + 300,
+        nonce: generateNonce(),
+        resource: '/api/resource',
+      };
       req = createMockRequest({
         headers: {
           [X402_HEADERS.PAYMENT_SIGNATURE]: validSignature,
@@ -640,7 +641,7 @@ describe('x402Middleware', () => {
         payTo: recipientAddress,
         payer: '0xABC123def456789012345678901234567890abcd',
         deadline: Math.floor(Date.now() / 1000) + 300,
-        nonce: 'testnonce123',
+        nonce: generateNonce(),
       };
       
       req = createMockRequest({
@@ -668,7 +669,7 @@ describe('x402Middleware', () => {
         payTo: recipientAddress,
         payer: '0xABC123def456789012345678901234567890abcd',
         deadline: Math.floor(Date.now() / 1000) + 300,
-        nonce: 'testnonce123',
+        nonce: generateNonce(),
       };
       
       (verifyTypedData as Mock).mockResolvedValue(false);
@@ -749,7 +750,7 @@ describe('x402Middleware', () => {
         payTo: recipientAddress,
         payer: '0xABC123def456789012345678901234567890abcd',
         deadline: Math.floor(Date.now() / 1000) + 300,
-        nonce: 'testnonce123',
+        nonce: generateNonce(),
       };
       
       (verifyTypedData as Mock).mockResolvedValue(true);
@@ -782,7 +783,7 @@ describe('x402Middleware', () => {
         payTo: recipientAddress,
         payer: '0xABC123def456789012345678901234567890abcd',
         deadline: Math.floor(Date.now() / 1000) + 300,
-        nonce: 'testnonce123',
+        nonce: generateNonce(),
       };
       
       (verifyTypedData as Mock).mockResolvedValue(true);
@@ -822,7 +823,7 @@ describe('x402Middleware', () => {
         payTo: recipientAddress,
         payer: '0xABC123def456789012345678901234567890abcd',
         deadline: Math.floor(Date.now() / 1000) + 300,
-        nonce: 'testnonce123',
+        nonce: generateNonce(),
       };
 
       (axios.post as Mock).mockResolvedValue({
@@ -861,7 +862,7 @@ describe('x402Middleware', () => {
         payTo: recipientAddress,
         payer: '0xABC123def456789012345678901234567890abcd',
         deadline: Math.floor(Date.now() / 1000) + 300,
-        nonce: 'testnonce123',
+        nonce: generateNonce(),
       };
 
       (verifyTypedData as Mock).mockImplementation(() => {
@@ -907,7 +908,7 @@ describe('x402Middleware', () => {
         payTo: recipientAddress,
         payer: '0xABC123def456789012345678901234567890abcd',
         deadline: Math.floor(Date.now() / 1000) + 300,
-        nonce: 'testnonce123',
+        nonce: generateNonce(),
       };
 
       (verifyTypedData as Mock).mockResolvedValue(true);
@@ -946,7 +947,7 @@ describe('x402Middleware', () => {
         payTo: recipientAddress,
         payer: '0xABC123def456789012345678901234567890abcd',
         deadline: Math.floor(Date.now() / 1000) + 300,
-        nonce: 'testnonce123',
+        nonce: generateNonce(),
       };
 
       (verifyTypedData as Mock).mockResolvedValue(true);

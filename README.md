@@ -1,473 +1,324 @@
 # @wazabiai/x402
 
-<div align="center">
+An open protocol for internet-native payments. Pay for any HTTP resource with crypto using the `402 Payment Required` status code.
 
-**The Payment Rails for the Agent Economy — x402 Protocol SDK with Identity, ERC-4337 Wallets & Settlement**
+Supports **Ethereum**, **Base**, and **BNB Chain** out of the box.
 
-[![npm version](https://img.shields.io/npm/v/@wazabiai/x402)](https://www.npmjs.com/package/@wazabiai/x402)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue)](https://www.typescriptlang.org/)
-
-</div>
-
----
-
-## Overview
-
-The x402 protocol standardizes crypto payments over HTTP, enabling seamless pay-per-use APIs and premium content access on the blockchain.
-
-**Protocol Flow:**
-1. **402 Payment Required** — Server responds with payment details in headers
-2. **EIP-712 Signing** — Client signs typed data payload
-3. **Retry with Signature** — Client retries with `X-PAYMENT-SIGNATURE` header
-4. **Verification** — Server verifies signature and processes request
-
-## Installation
-
-```bash
+```
 npm install @wazabiai/x402
-# or
-pnpm add @wazabiai/x402
-# or
-yarn add @wazabiai/x402
 ```
 
-**Peer Dependencies:**
-```bash
-npm install viem express
+## How it works
+
+```
+Client                         Server
+  |                               |
+  |  GET /api/premium             |
+  |------------------------------>|
+  |                               |
+  |  402 + X-PAYMENT-REQUIRED     |
+  |<------------------------------|
+  |                               |
+  |  Signs EIP-712 payment        |
+  |                               |
+  |  GET /api/premium             |
+  |  + X-PAYMENT-SIGNATURE        |
+  |  + X-PAYMENT-PAYLOAD          |
+  |------------------------------>|
+  |                               |
+  |  200 OK                       |
+  |<------------------------------|
 ```
 
-## Quick Start
-
-### Client Usage
+## Pay for a resource (client)
 
 ```typescript
 import { X402Client } from '@wazabiai/x402/client';
 
-// Create client with private key (for server-to-server)
 const client = new X402Client({
   privateKey: process.env.PRIVATE_KEY,
 });
 
-// Make requests - 402 responses are handled automatically
-const response = await client.fetch('https://api.example.com/premium-data');
+const response = await client.fetch('https://api.example.com/premium');
 console.log(response.data);
 ```
 
-### Server Usage
+The client detects `402` responses, signs a payment, and retries automatically.
+
+## Charge for a resource (server)
 
 ```typescript
 import express from 'express';
 import { x402Middleware } from '@wazabiai/x402/server';
-import { BSC_USDT, parseTokenAmount } from '@wazabiai/x402/chains';
 
 const app = express();
 
-// Protect routes with payment requirement
 app.use('/api/paid', x402Middleware({
-  recipientAddress: '0xYourWalletAddress',
-  amount: parseTokenAmount('0.10', BSC_USDT.address).toString(), // $0.10 USDT
-  tokenAddress: BSC_USDT.address,
-  description: 'Access to premium API',
+  recipientAddress: '0xYourAddress',
+  amount: '1000000',           // in token smallest unit
+  tokenAddress: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', // USDC on ETH
+  networkId: 'eip155:1',
 }));
 
 app.get('/api/paid/data', (req, res) => {
-  // Payment verified ✓
-  res.json({ premium: 'content' });
+  res.json({ result: 'premium content' });
 });
 
 app.listen(3000);
 ```
 
-## API Reference
+The middleware returns `402` with payment details to unsigned requests, and verifies EIP-712 signatures on retry.
 
-### Client
+## Supported networks
 
-#### `X402Client`
+| Network | ID | Tokens |
+|---------|----|--------|
+| Ethereum | `eip155:1` | USDC (6d), USDT (6d), WETH (18d) |
+| BNB Chain | `eip155:56` | USDT (18d), USDC (18d), WBNB (18d) |
+| Base | `eip155:8453` | USDC (6d) |
+
+## Installation
+
+```bash
+npm install @wazabiai/x402 viem
+```
+
+`viem` is a peer dependency. Install `express` too if you use the server middleware or facilitator.
+
+Tree-shakeable imports -- use only what you need:
 
 ```typescript
-import { X402Client } from '@wazabiai/x402/client';
+import { X402Client }       from '@wazabiai/x402/client';
+import { x402Middleware }   from '@wazabiai/x402/server';
+import { ETH_USDC }         from '@wazabiai/x402/chains';
+import type { SignedPayment } from '@wazabiai/x402/types';
+```
 
+## Client API
+
+```typescript
 const client = new X402Client({
-  // Private key for signing (hex, with or without 0x)
-  privateKey?: string;
-  
-  // Custom RPC URL (defaults to BSC public RPC)
-  rpcUrl?: string;
-  
-  // Supported networks (defaults to ['eip155:56'])
-  supportedNetworks?: string[];
-  
-  // Payment deadline in seconds (default: 300)
-  defaultDeadline?: number;
-  
-  // Auto-retry on 402 (default: true)
-  autoRetry?: boolean;
-  
-  // Maximum retry attempts (default: 1)
-  maxRetries?: number;
-  
-  // Callbacks
-  onPaymentRequired?: (requirement: PaymentRequirement) => void;
-  onPaymentSigned?: (payment: SignedPayment) => void;
+  privateKey: '0x...',
+  supportedNetworks: ['eip155:1', 'eip155:56', 'eip155:8453'],
+  defaultDeadline: 300,       // seconds
+  autoRetry: true,
+  maxRetries: 1,
+  onPaymentRequired: (req) => console.log('Payment needed:', req.amount),
+  onPaymentSigned: (payment) => console.log('Signed:', payment.signature),
 });
+
+await client.fetch(url);
+await client.get(url);
+await client.post(url, data);
+await client.put(url, data);
+await client.delete(url);
+
+// Or sign manually
+const signed = await client.signPayment(requirement);
 ```
 
-**Methods:**
+Factory helpers:
 
 ```typescript
-// Generic fetch with automatic 402 handling
-await client.fetch(url, options);
+import { createX402Client, createX402ClientFromEnv } from '@wazabiai/x402/client';
 
-// HTTP verb shortcuts
-await client.get(url, options);
-await client.post(url, data, options);
-await client.put(url, data, options);
-await client.delete(url, options);
-
-// Manual signing
-const signedPayment = await client.signPayment(requirement);
+const client = createX402Client({ privateKey: '0x...' });
+const client = createX402ClientFromEnv(); // reads X402_PRIVATE_KEY
 ```
 
-### Server
-
-#### `x402Middleware`
+## Server API
 
 ```typescript
 import { x402Middleware } from '@wazabiai/x402/server';
 
-const middleware = x402Middleware({
-  // Required: Payment recipient address
-  recipientAddress: '0x...',
-  
-  // Required: Amount in smallest token unit (wei)
-  amount: '1000000000000000000',
-  
-  // Token address (default: BSC-USDT)
-  tokenAddress?: '0x...',
-  
-  // External facilitator URL for verification
-  facilitatorUrl?: string;
-  
-  // Payment description
-  description?: string;
-  
-  // Network ID (default: 'eip155:56')
-  networkId?: string;
-  
-  // Deadline duration in seconds (default: 300)
-  deadlineDuration?: number;
-  
-  // Custom verification logic
-  verifyPayment?: (payment, req) => Promise<boolean>;
-  
-  // Routes to exclude from payment
-  excludeRoutes?: string[];
+app.use('/api/paid', x402Middleware({
+  recipientAddress: '0x...',   // required
+  amount: '1000000',           // required, smallest unit
+  tokenAddress: '0x...',       // optional, defaults to USDT
+  networkId: 'eip155:1',       // optional, defaults to eip155:56
+  description: 'API access',   // optional
+  excludeRoutes: ['/health'],  // optional
+  facilitatorUrl: 'https://...', // optional, delegate verification
+}));
+```
+
+Access verified payment info on the request:
+
+```typescript
+app.get('/api/paid/data', (req, res) => {
+  const payer = req.x402?.signer;
+  res.json({ payer, data: '...' });
 });
 ```
 
-#### Utility Functions
+Standalone verification:
 
 ```typescript
-import { 
-  createPaymentRequirement,
-  verifyPayment,
-  parsePaymentFromRequest
-} from '@wazabiai/x402/server';
+import { verifyPayment, parsePaymentFromRequest } from '@wazabiai/x402/server';
 
-// Create a payment requirement manually
-const requirement = createPaymentRequirement({
-  recipientAddress: '0x...',
-  amount: '1000000000000000000',
-  resource: '/api/resource',
-});
-
-// Verify a signed payment
-const result = await verifyPayment(
-  signedPayment,
-  recipientAddress,
-  'eip155:56'
-);
-
-// Parse payment from Express request
 const payment = parsePaymentFromRequest(req);
+const result = await verifyPayment(payment, recipientAddress, networkId);
 ```
 
-### Types
-
-```typescript
-import type {
-  PaymentRequirement,
-  PaymentPayload,
-  SignedPayment,
-  NetworkConfig,
-  TokenConfig,
-} from '@wazabiai/x402/types';
-```
-
-### Chain Configuration
+## Chains
 
 ```typescript
 import {
-  BSC_CHAIN_ID,        // 56
-  BSC_CAIP_ID,         // 'eip155:56'
-  BSC_USDT,            // TokenConfig
-  BSC_USDC,            // TokenConfig
-  BSC_TOKENS,          // All tokens
-  formatTokenAmount,   // Convert wei to readable
-  parseTokenAmount,    // Convert readable to wei
+  // Ethereum
+  ETH_USDC, ETH_USDT, ETH_WETH, ETH_CAIP_ID,
+  formatEthTokenAmount, parseEthTokenAmount,
+
+  // BNB Chain
+  BSC_USDT, BSC_USDC, BSC_WBNB, BSC_CAIP_ID,
+  formatTokenAmount, parseTokenAmount,
+
+  // Base
+  BASE_USDC, BASE_CAIP_ID,
+  formatBaseTokenAmount, parseBaseTokenAmount,
+
+  // Registry
+  getNetworkConfig, isNetworkSupported,
+  getSupportedNetworkIds, getTokenForNetwork,
 } from '@wazabiai/x402/chains';
+
+parseEthTokenAmount('10.50', ETH_USDC.address);  // 10500000n
+formatTokenAmount(1000000000000000000n, BSC_USDT.address); // '1.00'
 ```
 
-## Protocol Details
+## Facilitator
 
-### HTTP Headers
+The Facilitator is an optional service that extends x402 with agent identity, ERC-4337 smart wallets, and on-chain settlement.
 
-| Header | Direction | Description |
-|--------|-----------|-------------|
-| `X-PAYMENT-REQUIRED` | Response | JSON payment requirement |
-| `X-PAYMENT-SIGNATURE` | Request | EIP-712 signature |
-| `X-PAYMENT-PAYLOAD` | Request | JSON payment payload |
+```bash
+# Run standalone
+npx x402-facilitator
 
-### EIP-712 Structure
-
-**Domain:**
-```typescript
-{
-  name: 'x402',
-  version: '2.0.0',
-  chainId: 56  // BSC
-}
+# Or mount on your app
 ```
 
-**Payment Type:**
 ```typescript
-{
-  Payment: [
-    { name: 'amount', type: 'uint256' },
-    { name: 'token', type: 'address' },
-    { name: 'chainId', type: 'uint256' },
-    { name: 'payTo', type: 'address' },
-    { name: 'payer', type: 'address' },
-    { name: 'deadline', type: 'uint256' },
-    { name: 'nonce', type: 'string' },
-    { name: 'resource', type: 'string' },
-  ]
-}
-```
-
-## Facilitator (Agent Financial Platform)
-
-The Wazabi x402 Facilitator extends the SDK into a complete Agent Financial Platform with identity (handles), ERC-4337 smart wallets, and settlement with 0.5% fees.
-
-### Quick Start
-
-```typescript
-import { startFacilitator } from '@wazabiai/x402/facilitator';
-
-// Start the facilitator server
-startFacilitator(3000);
-// Endpoints: /register, /resolve, /balance, /history, /settle, /supported, /skill.md
-```
-
-### Integrate with Existing Express App
-
-```typescript
-import express from 'express';
 import { createFacilitator } from '@wazabiai/x402/facilitator';
 
 const app = express();
-app.use(express.json());
 createFacilitator(app);
 app.listen(3000);
 ```
 
-### API Endpoints
+### Endpoints
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/register` | POST | Create handle + deploy ERC-4337 smart wallet |
-| `/resolve/:handle` | GET | Handle to address lookup |
-| `/balance/:handle` | GET | Token balances across chains |
-| `/history/:handle` | GET | Transaction history |
-| `/profile/:handle` | GET | Full agent profile |
-| `/verify` | POST | Verify payment (x402 standard) |
-| `/settle` | POST | Execute payment + 0.5% fee |
-| `/supported` | GET | Networks, tokens, schemes |
-| `/skill.md` | GET | OpenClaw skill file |
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/register` | Register a handle + deploy smart wallet |
+| GET | `/resolve/:handle` | Handle to address lookup |
+| GET | `/balance/:handle` | Token balances |
+| GET | `/history/:handle` | Transaction history |
+| POST | `/settle` | Execute payment (0.5% fee) |
+| POST | `/verify` | Verify x402 payment |
+| GET | `/supported` | Available networks and tokens |
+| GET | `/health` | Health check |
 
-### Register an Agent
-
-```typescript
-// POST /register
-const response = await fetch('https://facilitator.wazabi.ai/register', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    handle: 'molty',
-    networks: ['eip155:56', 'eip155:8453'],
-  }),
-});
-
-// Response:
-// {
-//   "handle": "molty.wazabi-x402",
-//   "wallet": {
-//     "address": "0x7A3b...F9c2",
-//     "type": "ERC-4337",
-//     "deployed": { "eip155:56": false, "eip155:8453": false }
-//   },
-//   "session_key": {
-//     "public": "0xABC...",
-//     "private": "0xDEF...",  // returned ONCE
-//     "expires": "2027-01-30T00:00:00Z"
-//   }
-// }
-```
-
-### Settlement with Fee
-
-```typescript
-// POST /settle
-const result = await fetch('https://facilitator.wazabi.ai/settle', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    from: 'molty',
-    to: 'agent-b',
-    amount: '100.00',
-    token: 'USDC',
-    network: 'eip155:8453',
-  }),
-});
-
-// Response:
-// {
-//   "success": true,
-//   "tx_hash": "0xABC123...",
-//   "settlement": {
-//     "gross": "100.00",
-//     "fee": "0.50",       // 0.5% to Wazabi treasury
-//     "gas": "0.02",
-//     "net": "99.48"       // recipient receives
-//   }
-// }
-```
-
-### Handle Format
-
-Handles follow the format `<name>.wazabi-x402` (e.g., `molty.wazabi-x402`).
-
-- 3-50 characters, lowercase alphanumeric with hyphens/underscores
-- Resolves to an ERC-4337 smart wallet address identical on all supported chains
-
-### OpenClaw Skill Integration
-
-The facilitator serves an OpenClaw-compatible skill file at `/skill.md`. OpenClaw agents can gain payment capabilities by reading this skill.
-
-### Smart Contracts
-
-The following Solidity contracts are included in `contracts/`:
-
-| Contract | Description |
-|----------|-------------|
-| `WazabiAccount.sol` | ERC-4337 smart wallet with session key support |
-| `WazabiAccountFactory.sol` | CREATE2 factory for deterministic wallet addresses |
-| `WazabiPaymaster.sol` | Verifying paymaster for gasless USDC/USDT transactions |
-
-## Supported Networks
-
-| Network | Chain ID | Tokens |
-|---------|----------|--------|
-| BNB Chain | eip155:56 | USDT, USDC, BUSD, WBNB |
-| Base | eip155:8453 | USDC |
-
-## Error Handling
-
-```typescript
-import {
-  PaymentRequiredError,
-  PaymentVerificationError,
-  UnsupportedNetworkError,
-  PaymentExpiredError,
-} from '@wazabiai/x402/client';
-
-try {
-  await client.fetch(url);
-} catch (error) {
-  if (error instanceof PaymentRequiredError) {
-    console.log('Payment needed:', error.requirement);
-  }
-  if (error instanceof UnsupportedNetworkError) {
-    console.log('Unsupported network:', error.details);
-  }
-}
-```
-
-## Examples
-
-### Pay-per-API-Call
-
-```typescript
-// Server
-app.use('/api/ai', x402Middleware({
-  recipientAddress: TREASURY,
-  amount: parseTokenAmount('0.001', BSC_USDT.address).toString(),
-  description: 'AI API call',
-}));
-
-app.post('/api/ai/generate', async (req, res) => {
-  const { x402 } = req as X402Request;
-  console.log(`Payment from: ${x402?.signer}`);
-  
-  const result = await generateAIResponse(req.body);
-  res.json(result);
-});
-```
-
-### Tiered Pricing
-
-```typescript
-const PRICES = {
-  basic: '100000000000000000',    // 0.1 USDT
-  premium: '1000000000000000000', // 1 USDT
-};
-
-app.use('/api/basic', x402Middleware({
-  recipientAddress: TREASURY,
-  amount: PRICES.basic,
-}));
-
-app.use('/api/premium', x402Middleware({
-  recipientAddress: TREASURY,
-  amount: PRICES.premium,
-}));
-```
-
-### With Facilitator
-
-```typescript
-// Offload verification to external service
-app.use('/api/paid', x402Middleware({
-  recipientAddress: TREASURY,
-  amount: PRICE,
-  facilitatorUrl: 'https://facilitator.example.com',
-}));
-```
-
-## Environment Variables
+### Register
 
 ```bash
-# Client
-X402_PRIVATE_KEY=0x...  # Used by createX402ClientFromEnv()
+curl -X POST http://localhost:3000/register \
+  -H 'Content-Type: application/json' \
+  -d '{"handle": "my-agent"}'
 ```
+
+Returns a handle (`my-agent.wazabi-x402`), a deterministic wallet address (same on all chains), and a session key pair.
+
+### Settle
+
+```bash
+curl -X POST http://localhost:3000/settle \
+  -H 'Content-Type: application/json' \
+  -d '{"from": "agent-a", "to": "agent-b", "amount": "10.00", "token": "USDC", "network": "eip155:8453"}'
+```
+
+Works with both handles and raw addresses. 0.5% fee is deducted automatically.
+
+### Configuration
+
+Copy `.env.example` and set:
+
+```bash
+TREASURY_PRIVATE_KEY=0x...          # required
+
+# Contract addresses (per chain)
+ACCOUNT_FACTORY_ETH=0x...           # required
+ACCOUNT_FACTORY_BSC=0x...
+ACCOUNT_FACTORY_BASE=0x...
+PAYMASTER_ETH=0x...                 # required
+PAYMASTER_BSC=0x...
+PAYMASTER_BASE=0x...
+
+# Bundler endpoints
+BUNDLER_URL_ETH=https://...         # required for wallet deployment
+BUNDLER_URL_BSC=https://...
+BUNDLER_URL_BASE=https://...
+
+# Optional
+RPC_ETH=https://eth.llamarpc.com
+RPC_BSC=https://bsc-dataseed.binance.org
+RPC_BASE=https://mainnet.base.org
+DATABASE_URL=postgresql://...       # defaults to in-memory
+PORT=3000
+```
+
+## OpenClaw (AI Agent Integration)
+
+The Facilitator exposes an **OpenClaw skill** at `GET /skill.md` -- a machine-readable markdown file that AI agents can discover and use to interact with the x402 payment protocol.
+
+```bash
+curl http://localhost:3000/skill.md
+```
+
+This enables any OpenClaw-compatible agent to:
+
+- **Register** a handle and get a smart wallet across all supported chains
+- **Check balances** and transaction history
+- **Make payments** between agents or addresses via the `/settle` endpoint
+- **Accept payments** by embedding x402 headers in HTTP responses
+
+No special SDK needed on the agent side -- just HTTP and the skill file.
+
+## Smart contracts
+
+Three Solidity contracts in `contracts/` power the ERC-4337 wallet system:
+
+- **WazabiAccount** -- Smart wallet with session keys and spending limits
+- **WazabiAccountFactory** -- CREATE2 factory for deterministic addresses
+- **WazabiPaymaster** -- Gas sponsorship via ERC-20 token payment
+
+Compile with `npx hardhat compile`. Deployment requires wallet access and is separate from the SDK build.
+
+## Development
+
+```bash
+npm install
+npm run build          # ESM + CJS + declarations
+npm test               # 336 tests via Vitest
+npm run dev            # build with watch
+```
+
+## Protocol
+
+x402 uses [EIP-712](https://eips.ethereum.org/EIPS/eip-712) typed data signatures over HTTP headers.
+
+**Headers:**
+- `x-payment-required` -- Server sends payment details (amount, token, network, recipient)
+- `x-payment-signature` -- Client sends EIP-712 signature
+- `x-payment-payload` -- Client sends signed payload
+
+**EIP-712 domain:** `{ name: 'x402', version: '2.0.0', chainId }`
+
+**Payment type:**
+```
+Payment(uint256 amount, address token, uint256 chainId, address payTo, address payer, uint256 deadline, string nonce, string resource)
+```
+
+Replay protection via per-nonce tracking with 10-minute TTL.
 
 ## License
 
-MIT © Wazabi
-
----
-
-<div align="center">
-  <sub>Built with ❤️ for the decentralized web</sub>
-</div>
+MIT

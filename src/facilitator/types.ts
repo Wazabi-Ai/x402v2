@@ -22,7 +22,7 @@ export const SETTLEMENT_FEE_BPS = 50 as const;
 /**
  * Supported networks for agent wallets
  */
-export const AGENT_SUPPORTED_NETWORKS = ['eip155:56', 'eip155:8453'] as const;
+export const AGENT_SUPPORTED_NETWORKS = ['eip155:1', 'eip155:56', 'eip155:8453'] as const;
 
 /**
  * Session key default validity duration (1 year in seconds)
@@ -52,7 +52,7 @@ export const HandleSchema = z.string()
  */
 export const RegisterRequestSchema = z.object({
   handle: HandleSchema,
-  networks: z.array(z.enum(['eip155:56', 'eip155:8453'])).default(['eip155:56', 'eip155:8453']),
+  networks: z.array(z.enum(['eip155:1', 'eip155:56', 'eip155:8453'])).default(['eip155:1', 'eip155:56', 'eip155:8453']),
   owner: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Invalid owner address').optional(),
   metadata: z.record(z.unknown()).optional(),
 });
@@ -195,6 +195,18 @@ export const SettleRequestSchema = z.object({
 });
 
 export type SettleRequest = z.infer<typeof SettleRequestSchema>;
+
+/**
+ * Payment verification request
+ */
+export const VerifyRequestSchema = z.object({
+  from: z.string().min(1, 'From handle or address required'),
+  amount: z.string().regex(/^\d+(\.\d+)?$/, 'Amount must be a numeric string'),
+  token: z.string().default('USDC'),
+  network: z.string().default('eip155:8453'),
+});
+
+export type VerifyRequest = z.infer<typeof VerifyRequestSchema>;
 
 /**
  * Settlement response

@@ -38,18 +38,7 @@ coverage/
 .npmrc
 *.tgz
 
-# Debug
-*.log
-
-# Lock files (use one)
-# package-lock.json
-# yarn.lock
-# pnpm-lock.yaml
-
 # Hardhat
 artifacts/
 cache/
 typechain-types/
-
-# Deployment outputs (keep .gitkeep)
-deployments/*.json

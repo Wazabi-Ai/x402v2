@@ -65,17 +65,6 @@ export const BSC_USDC: TokenConfig = {
 } as const;
 
 /**
- * BSC-BUSD (Binance USD) Token Configuration
- * @see https://bscscan.com/token/0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56
- */
-export const BSC_BUSD: TokenConfig = {
-  address: '0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56',
-  symbol: 'BUSD',
-  decimals: 18,
-  name: 'Binance USD',
-} as const;
-
-/**
  * Wrapped BNB (WBNB) Token Configuration
  * @see https://bscscan.com/token/0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c
  */
@@ -97,7 +86,6 @@ export const BSC_DEFAULT_TOKEN = BSC_USDT;
 export const BSC_TOKENS = {
   USDT: BSC_USDT,
   USDC: BSC_USDC,
-  BUSD: BSC_BUSD,
   WBNB: BSC_WBNB,
 } as const;
 
@@ -107,7 +95,6 @@ export const BSC_TOKENS = {
 export const BSC_TOKEN_BY_ADDRESS: Record<string, TokenConfig> = {
   [BSC_USDT.address.toLowerCase()]: BSC_USDT,
   [BSC_USDC.address.toLowerCase()]: BSC_USDC,
-  [BSC_BUSD.address.toLowerCase()]: BSC_BUSD,
   [BSC_WBNB.address.toLowerCase()]: BSC_WBNB,
 };
 
