@@ -45,3 +45,11 @@ coverage/
 # package-lock.json
 # yarn.lock
 # pnpm-lock.yaml
+
+# Hardhat
+artifacts/
+cache/
+typechain-types/
+
+# Deployment outputs (keep .gitkeep)
+deployments/*.json

@@ -95,6 +95,11 @@ export class HandleService {
 
     await this.store.createAgent(agent);
 
+    // Kick off wallet deployment on all supported networks (non-blocking, fire and forget)
+    this.deployAgentWallet(handle).catch(error => {
+      console.error(`[handle-service] Background wallet deployment failed for ${handle}:`, error);
+    });
+
     // Initialize balance records for each network
     for (const network of networks) {
       const tokens = this.getTokensForNetwork(network);
@@ -166,6 +171,64 @@ export class HandleService {
         balance: b.balance,
       })),
       totalTransactions,
+    };
+  }
+
+  /**
+   * Deploy agent wallet on all supported networks
+   *
+   * Attempts deployment on each network independently. Failures on
+   * individual networks are logged but do not affect other networks.
+   */
+  async deployAgentWallet(handle: string): Promise<Record<string, { deployed: boolean; txHash?: string }>> {
+    const agent = await this.store.getAgentByHandle(handle);
+    if (!agent) {
+      throw new HandleError(`Handle "${handle}" not found`, 'HANDLE_NOT_FOUND');
+    }
+
+    const results: Record<string, { deployed: boolean; txHash?: string }> = {};
+
+    for (const network of AGENT_SUPPORTED_NETWORKS) {
+      try {
+        const result = await this.walletService.deployWallet(
+          agent.wallet_address,
+          network,
+          agent.owner_address ?? agent.wallet_address,
+          agent.session_key_public,
+          agent.handle
+        );
+        results[network] = result;
+      } catch (error) {
+        console.error(`[handle-service] Wallet deployment failed on ${network} for ${handle}:`, error);
+        results[network] = { deployed: false };
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Get on-chain deployment status for an agent's wallet across all networks
+   */
+  async getDeploymentStatus(handle: string): Promise<{
+    handle: string;
+    wallet_address: string;
+    networks: Record<string, boolean>;
+  }> {
+    const agent = await this.store.getAgentByHandle(handle);
+    if (!agent) {
+      throw new HandleError(`Handle "${handle}" not found`, 'HANDLE_NOT_FOUND');
+    }
+
+    const networks = await this.walletService.getDeploymentStatus(
+      agent.wallet_address,
+      [...AGENT_SUPPORTED_NETWORKS]
+    );
+
+    return {
+      handle: agent.full_handle,
+      wallet_address: agent.wallet_address,
+      networks,
     };
   }
 
