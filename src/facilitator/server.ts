@@ -15,8 +15,10 @@
  *   GET    /supported       — Networks, tokens, schemes
  *   GET    /health          — Health check
  *   GET    /skill.md        — OpenClaw skill file
+ *   GET    /                — Portal dashboard (if portalDir configured)
  */
 
+import { resolve, join } from 'node:path';
 import type { Request, Response, NextFunction, Express } from 'express';
 import { InMemoryStore } from './db/schema.js';
 import { HandleService, HandleError } from './services/handle.js';
@@ -51,6 +53,8 @@ export interface FacilitatorConfig {
   walletService?: WalletService;
   /** Enable CORS (default: true) */
   cors?: boolean;
+  /** Absolute or relative path to the facilitator-portal directory to serve the dashboard UI at root */
+  portalDir?: string;
 }
 
 /**
@@ -408,6 +412,27 @@ export function createFacilitator(
     res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
     res.send(SKILL_MD_CONTENT);
   });
+
+  // ========================================================================
+  // Portal Dashboard (static files)
+  // ========================================================================
+
+  if (config.portalDir) {
+    const portalDir = resolve(config.portalDir);
+
+    const servePortalFile = (file: string) => (_req: Request, res: Response) => {
+      res.sendFile(join(portalDir, file), (err: Error | null) => {
+        if (err) {
+          res.status(404).json({ error: 'NOT_FOUND', message: 'File not found' });
+        }
+      });
+    };
+
+    app.get('/', servePortalFile('index.html'));
+    app.get('/favicon.svg', servePortalFile('favicon.svg'));
+    app.get('/styles/main.css', servePortalFile('styles/main.css'));
+    app.get('/scripts/main.js', servePortalFile('scripts/main.js'));
+  }
 }
 
 // ============================================================================
@@ -515,5 +540,8 @@ export async function startFacilitator(
     console.log(`[wazabi-x402] Facilitator running on port ${port}`);
     console.log(`[wazabi-x402] Health: http://localhost:${port}/health`);
     console.log(`[wazabi-x402] Skill:  http://localhost:${port}/skill.md`);
+    if (config?.portalDir) {
+      console.log(`[wazabi-x402] Portal: http://localhost:${port}/`);
+    }
   });
 }
