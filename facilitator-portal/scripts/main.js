@@ -8,9 +8,8 @@
 // Config
 // ============================================================================
 
-const API_BASE = window.location.hostname === 'localhost'
-  ? 'http://localhost:3000'
-  : 'https://facilitator.wazabi.ai';
+// Same-origin — portal is served from the facilitator server
+const API_BASE = '';
 
 const FEE_RATE = 0.005; // 0.5%
 const EST_GAS  = 0.02;
