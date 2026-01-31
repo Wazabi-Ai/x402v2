@@ -1,6 +1,6 @@
 {
   "name": "@wazabiai/x402",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "x402 v2 Payment Protocol SDK — Agent Financial Platform with identity, ERC-4337 wallets, and settlement for BNB Chain & Base",
   "author": "Wazabi",
   "license": "MIT",
