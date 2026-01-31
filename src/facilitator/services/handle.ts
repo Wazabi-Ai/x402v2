@@ -11,7 +11,6 @@ import type { InMemoryStore } from '../db/schema.js';
 import type { Agent, RegisterRequest, RegisterResponse } from '../types.js';
 import {
   HANDLE_REGEX,
-  HANDLE_SUFFIX,
   AGENT_SUPPORTED_NETWORKS,
   toFullHandle,
 } from '../types.js';

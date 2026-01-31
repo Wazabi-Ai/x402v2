@@ -31,8 +31,6 @@ import {
   SETTLEMENT_FEE_RATE,
   SETTLEMENT_FEE_BPS,
   AGENT_SUPPORTED_NETWORKS,
-  toFullHandle,
-  toShortHandle,
 } from './types.js';
 import type {
   SupportedResponse,

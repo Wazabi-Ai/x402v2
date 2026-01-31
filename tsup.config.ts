@@ -8,6 +8,7 @@ export default defineConfig({
     'types/index': 'src/types/index.ts',
     'chains/index': 'src/chains/index.ts',
     'facilitator/index': 'src/facilitator/index.ts',
+    'bin/facilitator': 'src/bin/facilitator.ts',
   },
   format: ['esm', 'cjs'],
   dts: true,

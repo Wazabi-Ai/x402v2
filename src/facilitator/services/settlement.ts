@@ -19,8 +19,6 @@ import {
   SETTLEMENT_FEE_BPS,
   calculateFee,
   calculateNet,
-  toFullHandle,
-  isFullHandle,
   isAddress,
 } from '../types.js';
 import { WAZABI_TREASURY } from './wallet.js';
@@ -47,13 +45,11 @@ export class SettlementService {
 
     // Resolve sender: try registered agent first, fall back to raw address
     let fromIdentifier: string;
-    let fromAddress: string;
 
     if (isAddress(from)) {
       // Raw address — check if registered, but don't require it
       const sender = await this.store.getAgentByWallet(from);
       fromIdentifier = sender?.full_handle ?? from;
-      fromAddress = from;
     } else {
       // Handle — must be registered
       const sender = await this.store.getAgentByHandle(from);
@@ -64,7 +60,6 @@ export class SettlementService {
         );
       }
       fromIdentifier = sender.full_handle;
-      fromAddress = sender.wallet_address;
     }
 
     // Resolve recipient: try registered agent first, fall back to raw address

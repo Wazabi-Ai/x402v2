@@ -6,7 +6,7 @@
  * across all supported chains (BNB Chain + Base).
  */
 
-import { createPublicClient, http, encodePacked, keccak256, getAddress, concat, pad, toHex } from 'viem';
+import { createPublicClient, http, encodePacked, keccak256, getAddress, concat, pad } from 'viem';
 import { bsc } from 'viem/chains';
 import { BSC_DEFAULT_RPC } from '../../chains/bnb.js';
 

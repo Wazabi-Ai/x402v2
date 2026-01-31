@@ -70,8 +70,12 @@
       }
     }
   },
+  "bin": {
+    "x402-facilitator": "./dist/bin/facilitator.js"
+  },
   "files": [
     "dist",
+    "facilitator-portal",
     "README.md",
     "LICENSE"
   ],
@@ -79,6 +83,7 @@
     "access": "public"
   },
   "scripts": {
+    "start": "node dist/bin/facilitator.js",
     "build": "tsup",
     "dev": "tsup --watch",
     "clean": "rm -rf dist",
@@ -119,7 +124,7 @@
     "zod": "^3.22.4"
   },
   "peerDependencies": {
-    "express": "^4.18.0 || ^5.0.0",
+    "express": "^5.2.1",
     "viem": "^2.0.0"
   },
   "peerDependenciesMeta": {
