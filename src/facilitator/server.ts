@@ -23,7 +23,7 @@ import type { Request, Response, NextFunction, Express } from 'express';
 import { InMemoryStore } from './db/schema.js';
 import { HandleService, HandleError } from './services/handle.js';
 import { SettlementService, SettlementError } from './services/settlement.js';
-import { WalletService } from './services/wallet.js';
+import { WalletService, WAZABI_TREASURY } from './services/wallet.js';
 import {
   RegisterRequestSchema,
   SettleRequestSchema,
@@ -39,10 +39,22 @@ import type {
   ProfileResponse,
 } from './types.js';
 import { SUPPORTED_NETWORKS, getSupportedNetworkIds } from '../chains/index.js';
+import type { PublicClient, WalletClient } from 'viem';
 
 // ============================================================================
 // Facilitator Application
 // ============================================================================
+
+/**
+ * Server-level config for startFacilitator (environment / deployment settings)
+ */
+export interface FacilitatorServerConfig {
+  port?: number;
+  portalDir?: string;
+  treasuryAddress?: `0x${string}`;
+  publicClients?: Record<string, PublicClient>;
+  walletClients?: Record<string, WalletClient>;
+}
 
 export interface FacilitatorConfig {
   /** Custom store (defaults to InMemoryStore) */
@@ -53,6 +65,12 @@ export interface FacilitatorConfig {
   cors?: boolean;
   /** Absolute or relative path to the facilitator-portal directory to serve the dashboard UI at root */
   portalDir?: string;
+  /** Treasury wallet address for fee collection */
+  treasuryAddress?: `0x${string}`;
+  /** Public clients for on-chain reads, keyed by CAIP-2 network ID */
+  publicClients?: Record<string, PublicClient>;
+  /** Wallet clients for on-chain writes, keyed by CAIP-2 network ID */
+  walletClients?: Record<string, WalletClient>;
 }
 
 /**
@@ -76,7 +94,12 @@ export function createFacilitator(
   const store = config.store ?? new InMemoryStore();
   const walletService = config.walletService ?? new WalletService();
   const handleService = new HandleService(store, walletService);
-  const settlementService = new SettlementService(store);
+
+  // Build settlement config from server config (treasury address + viem clients)
+  const settlementConfig = config.treasuryAddress && config.publicClients && config.walletClients
+    ? { treasuryAddress: config.treasuryAddress, publicClients: config.publicClients, walletClients: config.walletClients }
+    : undefined;
+  const settlementService = new SettlementService(handleService, store, settlementConfig);
 
   // CORS middleware
   if (config.cors !== false) {
@@ -306,6 +329,36 @@ export function createFacilitator(
   });
 
   // ========================================================================
+  // GET /deployment/:handle — Wallet deployment status across networks
+  // ========================================================================
+
+  app.get('/deployment/:handle', async (req: Request, res: Response) => {
+    try {
+      const handle = req.params['handle'];
+      if (!handle) {
+        res.status(400).json({ error: 'MISSING_HANDLE', message: 'Handle parameter required' });
+        return;
+      }
+
+      const status = await handleService.getDeploymentStatus(handle);
+      res.json(status);
+    } catch (error) {
+      if (error instanceof HandleError) {
+        res.status(404).json({
+          error: error.code,
+          message: error.message,
+        });
+        return;
+      }
+      console.error('[facilitator] Deployment status error:', error);
+      res.status(500).json({
+        error: 'INTERNAL_ERROR',
+        message: 'Failed to check deployment status',
+      });
+    }
+  });
+
+  // ========================================================================
   // POST /verify — Verify payment (x402 standard)
   // ========================================================================
 
@@ -392,11 +445,14 @@ export function createFacilitator(
       };
     });
 
-    const response: SupportedResponse = {
+    const treasuryAddress = config.treasuryAddress ?? WAZABI_TREASURY;
+
+    const response: SupportedResponse & { treasury_address: string } = {
       networks,
       handle_suffix: HANDLE_SUFFIX,
       fee_rate: `${SETTLEMENT_FEE_BPS}bps (${SETTLEMENT_FEE_RATE * 100}%)`,
       wallet_type: 'ERC-4337',
+      treasury_address: treasuryAddress,
     };
 
     res.json(response);
@@ -525,7 +581,7 @@ When encountering an HTTP 402 response:
  */
 export async function startFacilitator(
   port: number = 3000,
-  config?: FacilitatorConfig
+  config?: FacilitatorConfig | FacilitatorServerConfig
 ): Promise<void> {
   // Dynamic import to keep express as optional peer dependency
   const { default: express } = await import('express');
