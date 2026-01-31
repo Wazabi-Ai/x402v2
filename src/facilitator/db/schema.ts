@@ -99,6 +99,7 @@ export interface DataStore {
   getAgent(id: string): Promise<Agent | null>;
   getAgentByHandle(handle: string): Promise<Agent | null>;
   getAgentByWallet(wallet: string): Promise<Agent | null>;
+  handleExists(handle: string): Promise<boolean>;
   getAllAgents(): Promise<Agent[]>;
   getAgentCount(): Promise<number>;
   updateAgent(id: string, updates: Partial<Agent>): Promise<Agent | null>;
@@ -112,8 +113,9 @@ export interface DataStore {
   createTransaction(tx: Transaction): Promise<Transaction>;
   getTransaction(id: string): Promise<Transaction | null>;
   updateTransactionStatus(id: string, status: string, txHash?: string): Promise<void>;
+  getTransactionsByHandle(handleOrAddress: string, limit?: number, offset?: number): Promise<{ transactions: Transaction[]; total: number }>;
   getTransactionHistory(handle: string, limit?: number, offset?: number): Promise<Transaction[]>;
-  getTransactionCount(): Promise<number>;
+  getTransactionCount(handle?: string): Promise<number>;
 }
 
 // ============================================================================
@@ -324,23 +326,4 @@ export class InMemoryStore implements DataStore {
       tx => tx.from_handle === fullHandle || tx.to_address === fullHandle,
     ).length;
   }
-}
-
-// ============================================================================
-// Store Factory
-// ============================================================================
-
-/**
- * Create a DataStore instance.
- *
- * If a `databaseUrl` is provided the factory will eventually return a
- * PostgreSQL-backed store.  Until the driver is implemented it falls back
- * to InMemoryStore with a warning.
- */
-export function createStore(databaseUrl?: string): DataStore {
-  if (databaseUrl) {
-    console.warn('[db] PostgreSQL URL provided but driver not yet implemented. Using in-memory store.');
-    // TODO: Implement PostgreSQL store
-  }
-  return new InMemoryStore();
 }

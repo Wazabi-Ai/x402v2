@@ -21,14 +21,7 @@ import {
   toHex,
   type Hex,
 } from 'viem';
-import { CHAIN_MAP } from '../config.js';
-
-// Well-known ERC-4337 EntryPoint v0.7 address (same on all EVM chains)
-const DEFAULT_ENTRYPOINT = '0x0000000071727De22E5E9d8BAf0edAc6f37da032' as `0x${string}`;
-
-// Default public RPCs (used when no RPC URL is explicitly provided)
-const DEFAULT_RPC_BSC = 'https://bsc-dataseed.binance.org';
-const DEFAULT_RPC_BASE = 'https://mainnet.base.org';
+import { CHAIN_MAP, DEFAULT_ENTRYPOINT, DEFAULT_RPC_BSC, DEFAULT_RPC_BASE } from '../config.js';
 
 // ============================================================================
 // Wallet Service Config

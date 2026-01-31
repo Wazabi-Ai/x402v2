@@ -28,11 +28,11 @@ export interface FacilitatorEnvConfig {
 }
 
 // Well-known ERC-4337 EntryPoint v0.7
-const DEFAULT_ENTRYPOINT = '0x0000000071727De22E5E9d8BAf0edAc6f37da032' as `0x${string}`;
+export const DEFAULT_ENTRYPOINT = '0x0000000071727De22E5E9d8BAf0edAc6f37da032' as `0x${string}`;
 
 // Default RPCs
-const DEFAULT_RPC_BSC = 'https://bsc-dataseed.binance.org';
-const DEFAULT_RPC_BASE = 'https://mainnet.base.org';
+export const DEFAULT_RPC_BSC = 'https://bsc-dataseed.binance.org';
+export const DEFAULT_RPC_BASE = 'https://mainnet.base.org';
 
 export function loadConfig(): FacilitatorEnvConfig {
   const treasuryPrivateKey = requireEnv('TREASURY_PRIVATE_KEY') as `0x${string}`;
