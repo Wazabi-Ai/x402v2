@@ -9,7 +9,8 @@ import {
   type WalletClient,
 } from 'viem';
 import { privateKeyToAccount, type PrivateKeyAccount } from 'viem/accounts';
-import { bsc } from 'viem/chains';
+import { bsc, base } from 'viem/chains';
+import type { Chain } from 'viem';
 
 import {
   type PaymentRequirement,
@@ -29,6 +30,13 @@ import {
   calculateDeadline,
 } from '../types/index.js';
 import { BSC_CAIP_ID, BSC_DEFAULT_RPC } from '../chains/bnb.js';
+import { BASE_CAIP_ID, BASE_DEFAULT_RPC } from '../chains/base.js';
+
+/** Map CAIP-2 network IDs to viem chain objects */
+const CHAIN_LOOKUP: Record<string, { chain: Chain; rpc: string }> = {
+  [BSC_CAIP_ID]: { chain: bsc, rpc: BSC_DEFAULT_RPC },
+  [BASE_CAIP_ID]: { chain: base, rpc: BASE_DEFAULT_RPC },
+};
 
 // ============================================================================
 // X402 Client Class
@@ -78,12 +86,17 @@ export class X402Client {
       const normalizedKey = config.privateKey.startsWith('0x')
         ? config.privateKey as `0x${string}`
         : `0x${config.privateKey}` as `0x${string}`;
-      
+
       this.account = privateKeyToAccount(normalizedKey);
+
+      // Resolve chain from the first supported network (defaults to BSC)
+      const primaryNetwork = this.config.supportedNetworks[0] ?? BSC_CAIP_ID;
+      const lookup = CHAIN_LOOKUP[primaryNetwork] ?? CHAIN_LOOKUP[BSC_CAIP_ID]!;
+
       this.walletClient = createWalletClient({
         account: this.account,
-        chain: bsc,
-        transport: http(config.rpcUrl ?? BSC_DEFAULT_RPC),
+        chain: lookup.chain,
+        transport: http(config.rpcUrl ?? lookup.rpc),
       });
     }
   }
@@ -270,8 +283,7 @@ export class X402Client {
    */
   private parsePaymentRequirement(response: AxiosResponse): PaymentRequirement {
     // Try to get from header first
-    const headerValue = response.headers[X402_HEADERS.PAYMENT_REQUIRED] ||
-                        response.headers[X402_HEADERS.PAYMENT_REQUIRED.toLowerCase()];
+    const headerValue = response.headers[X402_HEADERS.PAYMENT_REQUIRED];
 
     let requirementData: unknown;
 
@@ -378,3 +390,10 @@ export {
   BSC_USDC,
   BSC_TOKENS,
 } from '../chains/bnb.js';
+
+export {
+  BASE_CAIP_ID,
+  BASE_CHAIN_ID,
+  BASE_USDC,
+  BASE_TOKENS,
+} from '../chains/base.js';

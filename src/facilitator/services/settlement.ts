@@ -172,7 +172,9 @@ export class SettlementService {
 
     // Calculate fees
     const fee = calculateFee(amount);
-    const estimatedGas = '0.02'; // Estimated gas cost in token units
+    // TODO: Estimate gas dynamically via publicClient.estimateGas() and a price oracle.
+    // For now use a conservative fixed estimate in token (USD) units.
+    const estimatedGas = '0.02';
     const net = calculateNet(amount, fee, estimatedGas);
 
     if (parseFloat(net) <= 0) {
@@ -312,14 +314,17 @@ export class SettlementService {
       // 5. Execute ERC-20 transfer: treasury -> recipient for the net amount.
       //    The 0.5% fee stays in the treasury automatically since the payer
       //    sent the full gross amount to the treasury via the x402 payment.
+      // The walletClient is created with account + chain in config.ts,
+      // so both are guaranteed to be set here. The non-null assertions are
+      // safe because we already checked walletClient.account above.
       const txHash = await walletClient.writeContract({
         address: tokenAddress,
         abi: erc20Abi,
         functionName: 'transfer',
         args: [toAddress as `0x${string}`, netAmountUnits],
-        account: walletClient.account,
-        chain: walletClient.chain ?? undefined,
-      } as any);
+        account: walletClient.account!,
+        chain: walletClient.chain!,
+      });
 
       // 6. Mark as submitted (transaction broadcast to network)
       await this.store.updateTransactionStatus(

@@ -197,6 +197,18 @@ export const SettleRequestSchema = z.object({
 export type SettleRequest = z.infer<typeof SettleRequestSchema>;
 
 /**
+ * Payment verification request
+ */
+export const VerifyRequestSchema = z.object({
+  from: z.string().min(1, 'From handle or address required'),
+  amount: z.string().regex(/^\d+(\.\d+)?$/, 'Amount must be a numeric string'),
+  token: z.string().default('USDC'),
+  network: z.string().default('eip155:8453'),
+});
+
+export type VerifyRequest = z.infer<typeof VerifyRequestSchema>;
+
+/**
  * Settlement response
  */
 export interface SettleResponse {

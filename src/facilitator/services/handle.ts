@@ -64,8 +64,9 @@ export class HandleService {
     const sessionKey = this.walletService.generateSessionKey();
 
     // Determine owner address
-    // When no owner is provided, derive one from the session key (first 20 bytes = valid address)
-    const ownerAddress = owner ?? ('0x' + sessionKey.publicKey.slice(2, 42));
+    // The publicKey is a bytes32-padded Ethereum address (from secp256k1 derivation).
+    // Extract the last 20 bytes (40 hex chars) to recover the address.
+    const ownerAddress = owner ?? ('0x' + sessionKey.publicKey.slice(-40));
 
     // Compute deterministic wallet address
     const walletAddress = this.walletService.computeWalletAddress(

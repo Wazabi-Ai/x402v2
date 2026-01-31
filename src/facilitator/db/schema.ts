@@ -106,6 +106,7 @@ export interface DataStore {
 
   // Balances
   getBalances(agentId: string): Promise<AgentBalance[]>;
+  setBalance(balance: AgentBalance): Promise<void>;
   setBalance(agentId: string, balances: AgentBalance[]): Promise<void>;
   updateBalance(agentId: string, network: string, token: string, amount: string): Promise<void>;
 

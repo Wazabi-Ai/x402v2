@@ -21,6 +21,7 @@ import {
   toHex,
   type Hex,
 } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import { CHAIN_MAP, DEFAULT_ENTRYPOINT, DEFAULT_RPC_BSC, DEFAULT_RPC_BASE } from '../config.js';
 
 // ============================================================================
@@ -168,23 +169,31 @@ export class WalletService {
    *
    * Session keys allow agents to sign transactions without exposing
    * the owner's private key. They have spending limits and expiration.
+   *
+   * Uses viem's privateKeyToAccount for proper secp256k1 key derivation
+   * so the returned publicKey is the real Ethereum address of the key pair.
    */
   generateSessionKey(validityDurationSeconds: number = 365 * 24 * 60 * 60): SessionKeyPair {
-    // Generate random 32-byte private key
+    // Generate random 32-byte private key using secure randomness
     const privateKeyBytes = new Uint8Array(32);
-    if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-      crypto.getRandomValues(privateKeyBytes);
+    if (typeof globalThis.crypto !== 'undefined' && globalThis.crypto.getRandomValues) {
+      globalThis.crypto.getRandomValues(privateKeyBytes);
     } else {
-      for (let i = 0; i < privateKeyBytes.length; i++) {
-        privateKeyBytes[i] = Math.floor(Math.random() * 256);
-      }
+      // Node.js fallback
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const nodeCrypto = require('node:crypto') as typeof import('node:crypto');
+      const buf = nodeCrypto.randomBytes(32);
+      privateKeyBytes.set(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength));
     }
-    const privateKey = '0x' + Array.from(privateKeyBytes)
+    const privateKey = ('0x' + Array.from(privateKeyBytes)
       .map(b => b.toString(16).padStart(2, '0'))
-      .join('');
+      .join('')) as `0x${string}`;
 
-    // Derive public key (simplified - in production use proper EC key derivation)
-    const publicKey = keccak256(privateKey as `0x${string}`).slice(0, 66);
+    // Derive real Ethereum address from the private key via secp256k1
+    const account = privateKeyToAccount(privateKey);
+    // Use a bytes32-padded version of the address as the public key identifier
+    // (matches the bytes32 sessionKey parameter in WazabiAccount.sol)
+    const publicKey = pad(account.address, { size: 32 }) as `0x${string}`;
 
     const expires = new Date(Date.now() + validityDurationSeconds * 1000);
 

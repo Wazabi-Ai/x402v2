@@ -27,6 +27,7 @@ import { WalletService } from './services/wallet.js';
 import {
   RegisterRequestSchema,
   SettleRequestSchema,
+  VerifyRequestSchema,
   HANDLE_SUFFIX,
   SETTLEMENT_FEE_RATE,
   SETTLEMENT_FEE_BPS,
@@ -353,27 +354,17 @@ export function createFacilitator(
 
   app.post('/verify', async (req: Request, res: Response) => {
     try {
-      const { from, amount, token, network } = req.body as {
-        from?: string;
-        amount?: string;
-        token?: string;
-        network?: string;
-      };
-
-      if (!from || !amount) {
+      const parsed = VerifyRequestSchema.safeParse(req.body);
+      if (!parsed.success) {
         res.status(400).json({
           error: 'INVALID_REQUEST',
-          message: 'from and amount are required',
+          message: parsed.error.issues.map(i => i.message).join('; '),
+          details: parsed.error.issues,
         });
         return;
       }
 
-      const result = await settlementService.verifyPayment({
-        from,
-        amount,
-        token: token ?? 'USDC',
-        network: network ?? 'eip155:8453',
-      });
+      const result = await settlementService.verifyPayment(parsed.data);
 
       res.json(result);
     } catch (error) {
