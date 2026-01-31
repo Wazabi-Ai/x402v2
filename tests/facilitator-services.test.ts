@@ -474,7 +474,7 @@ describe('SettlementService', () => {
   beforeEach(async () => {
     store = new InMemoryStore();
     handleService = new HandleService(store);
-    settlementService = new SettlementService(handleService, store);
+    settlementService = new SettlementService(store);
 
     // Register two agents for testing
     await handleService.register({

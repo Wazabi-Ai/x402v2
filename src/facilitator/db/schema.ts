@@ -82,51 +82,7 @@ ${CREATE_TRANSACTIONS_TABLE}
 
 import type { Agent, AgentBalance, Transaction } from '../types.js';
 
-// ============================================================================
-// Transaction Status Type
-// ============================================================================
-
-export type TransactionStatus = 'pending' | 'confirmed' | 'failed';
-
-// ============================================================================
-// DataStore Interface
-// ============================================================================
-
-/**
- * Abstract data store interface.
- *
- * Both InMemoryStore (dev/testing) and a future PostgreSQL store should
- * implement this contract so that the rest of the application is
- * storage-agnostic.
- */
-export interface DataStore {
-  // Agents
-  createAgent(agent: Agent): Promise<Agent>;
-  getAgent(id: string): Promise<Agent | null>;
-  getAgentByHandle(handle: string): Promise<Agent | null>;
-  getAgentByWallet(wallet: string): Promise<Agent | null>;
-  getAllAgents(): Promise<Agent[]>;
-  getAgentCount(): Promise<number>;
-  updateAgent(id: string, updates: Partial<Agent>): Promise<Agent | null>;
-
-  // Balances
-  getBalance(agentId: string): Promise<AgentBalance[]>;
-  setBalance(agentId: string, balances: AgentBalance[]): Promise<void>;
-  updateBalance(agentId: string, network: string, token: string, amount: string): Promise<void>;
-
-  // Transactions
-  createTransaction(tx: Transaction): Promise<Transaction>;
-  getTransaction(id: string): Promise<Transaction | null>;
-  updateTransactionStatus(id: string, status: string, txHash?: string): Promise<void>;
-  getTransactionHistory(handle: string, limit?: number, offset?: number): Promise<Transaction[]>;
-  getTransactionCount(): Promise<number>;
-}
-
-// ============================================================================
-// In-Memory Store Implementation
-// ============================================================================
-
-export class InMemoryStore implements DataStore {
+export class InMemoryStore {
   private agents: Map<string, Agent> = new Map();
   private agentsByHandle: Map<string, Agent> = new Map();
   private agentsByWallet: Map<string, Agent> = new Map();
@@ -143,10 +99,6 @@ export class InMemoryStore implements DataStore {
     this.agentsByHandle.set(agent.handle, agent);
     this.agentsByWallet.set(agent.wallet_address.toLowerCase(), agent);
     return agent;
-  }
-
-  async getAgent(id: string): Promise<Agent | null> {
-    return this.agents.get(id) ?? null;
   }
 
   async getAgentById(id: string): Promise<Agent | null> {
@@ -172,66 +124,16 @@ export class InMemoryStore implements DataStore {
     return this.agents.size;
   }
 
-  async getAllAgents(): Promise<Agent[]> {
-    return Array.from(this.agents.values());
-  }
-
-  async updateAgent(id: string, updates: Partial<Agent>): Promise<Agent | null> {
-    const agent = this.agents.get(id);
-    if (!agent) return null;
-
-    // Merge updates but preserve the immutable id
-    const updated: Agent = { ...agent, ...updates, id: agent.id };
-
-    // Re-index: remove old entries if handle or wallet changed
-    if (agent.handle !== updated.handle) {
-      this.agentsByHandle.delete(agent.handle);
-    }
-    if (agent.wallet_address.toLowerCase() !== updated.wallet_address.toLowerCase()) {
-      this.agentsByWallet.delete(agent.wallet_address.toLowerCase());
-    }
-
-    this.agents.set(id, updated);
-    this.agentsByHandle.set(updated.handle, updated);
-    this.agentsByWallet.set(updated.wallet_address.toLowerCase(), updated);
-
-    return updated;
-  }
-
   // --- Balances ---
 
   async getBalances(agentId: string): Promise<AgentBalance[]> {
     return this.balances.get(agentId) ?? [];
   }
 
-  async getBalance(agentId: string): Promise<AgentBalance[]> {
-    return this.balances.get(agentId) ?? [];
-  }
-
-  /**
-   * Set balance(s) for an agent.
-   *
-   * Overloaded for backward compatibility:
-   *   - setBalance(balance: AgentBalance)          — legacy single-entry upsert
-   *   - setBalance(agentId: string, balances: AgentBalance[]) — DataStore interface
-   */
-  setBalance(balance: AgentBalance): Promise<void>;
-  setBalance(agentId: string, balances: AgentBalance[]): Promise<void>;
-  async setBalance(
-    balanceOrAgentId: AgentBalance | string,
-    balances?: AgentBalance[],
-  ): Promise<void> {
-    if (typeof balanceOrAgentId === 'string' && balances !== undefined) {
-      // DataStore interface: replace all balances for this agent
-      this.balances.set(balanceOrAgentId, [...balances]);
-      return;
-    }
-
-    // Legacy single-entry upsert
-    const balance = balanceOrAgentId as AgentBalance;
+  async setBalance(balance: AgentBalance): Promise<void> {
     const existing = this.balances.get(balance.agent_id) ?? [];
     const idx = existing.findIndex(
-      b => b.network === balance.network && b.token === balance.token,
+      b => b.network === balance.network && b.token === balance.token
     );
     if (idx >= 0) {
       existing[idx] = balance;
@@ -241,40 +143,11 @@ export class InMemoryStore implements DataStore {
     this.balances.set(balance.agent_id, existing);
   }
 
-  async updateBalance(
-    agentId: string,
-    network: string,
-    token: string,
-    amount: string,
-  ): Promise<void> {
-    const existing = this.balances.get(agentId) ?? [];
-    const entry: AgentBalance = {
-      agent_id: agentId,
-      network,
-      token,
-      balance: amount,
-      updated_at: new Date(),
-    };
-    const idx = existing.findIndex(
-      b => b.network === network && b.token === token,
-    );
-    if (idx >= 0) {
-      existing[idx] = entry;
-    } else {
-      existing.push(entry);
-    }
-    this.balances.set(agentId, existing);
-  }
-
   // --- Transactions ---
 
   async createTransaction(tx: Transaction): Promise<Transaction> {
     this.transactions.push(tx);
     return tx;
-  }
-
-  async getTransaction(id: string): Promise<Transaction | null> {
-    return this.transactions.find(t => t.id === id) ?? null;
   }
 
   async getTransactionsByHandle(
@@ -301,71 +174,22 @@ export class InMemoryStore implements DataStore {
     };
   }
 
-  async getTransactionHistory(
-    handle: string,
-    limit: number = 20,
-    offset: number = 0,
-  ): Promise<Transaction[]> {
-    const isRawAddress = /^0x[a-fA-F0-9]{40}$/.test(handle);
-    const identifier = isRawAddress
-      ? handle
-      : handle.endsWith('.wazabi-x402')
-        ? handle
-        : `${handle}.wazabi-x402`;
-    const filtered = this.transactions.filter(
-      tx => tx.from_handle === identifier || tx.to_address === identifier,
-    );
-    const sorted = filtered.sort(
-      (a, b) => b.created_at.getTime() - a.created_at.getTime(),
-    );
-    return sorted.slice(offset, offset + limit);
-  }
-
   async updateTransactionStatus(
     id: string,
-    status: string,
-    txHash?: string,
+    status: Transaction['status'],
+    txHash?: string
   ): Promise<void> {
     const tx = this.transactions.find(t => t.id === id);
     if (tx) {
-      tx.status = status as Transaction['status'];
+      tx.status = status;
       if (txHash) tx.tx_hash = txHash;
     }
   }
 
-  /**
-   * Get transaction count.
-   *
-   * When called without arguments (DataStore interface) returns the total
-   * number of transactions.  When called with a handle (legacy), returns
-   * the count for that specific agent.
-   */
-  async getTransactionCount(handle?: string): Promise<number> {
-    if (!handle) {
-      return this.transactions.length;
-    }
+  async getTransactionCount(handle: string): Promise<number> {
     const fullHandle = handle.endsWith('.wazabi-x402') ? handle : `${handle}.wazabi-x402`;
     return this.transactions.filter(
-      tx => tx.from_handle === fullHandle || tx.to_address === fullHandle,
+      tx => tx.from_handle === fullHandle || tx.to_address === fullHandle
     ).length;
   }
-}
-
-// ============================================================================
-// Store Factory
-// ============================================================================
-
-/**
- * Create a DataStore instance.
- *
- * If a `databaseUrl` is provided the factory will eventually return a
- * PostgreSQL-backed store.  Until the driver is implemented it falls back
- * to InMemoryStore with a warning.
- */
-export function createStore(databaseUrl?: string): DataStore {
-  if (databaseUrl) {
-    console.warn('[db] PostgreSQL URL provided but driver not yet implemented. Using in-memory store.');
-    // TODO: Implement PostgreSQL store
-  }
-  return new InMemoryStore();
 }

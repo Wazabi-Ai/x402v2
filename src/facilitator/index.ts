@@ -7,15 +7,6 @@
  * @packageDocumentation
  */
 
-// Configuration (centralized env-driven config)
-export {
-  loadConfig,
-  loadConfigSafe,
-  createClients,
-  CHAIN_MAP,
-  type FacilitatorEnvConfig,
-} from './config.js';
-
 // Server & routes
 export { createFacilitator, startFacilitator, type FacilitatorConfig } from './server.js';
 

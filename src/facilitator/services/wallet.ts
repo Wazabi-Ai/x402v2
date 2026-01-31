@@ -4,104 +4,41 @@
  * Handles smart wallet provisioning using Account Abstraction (ERC-4337).
  * Provides deterministic wallet addresses via CREATE2 that are identical
  * across all supported chains (BNB Chain + Base).
- *
- * All contract addresses and RPC endpoints are loaded from the centralized
- * config module (environment variables) rather than being hardcoded.
  */
 
-import {
-  createPublicClient,
-  http,
-  encodePacked,
-  encodeFunctionData,
-  keccak256,
-  getAddress,
-  concat,
-  pad,
-  toHex,
-  type Hex,
-} from 'viem';
-import { loadConfigSafe, CHAIN_MAP } from '../config.js';
+import { createPublicClient, http, encodePacked, keccak256, getAddress, concat, pad } from 'viem';
+import { bsc } from 'viem/chains';
+import { BSC_DEFAULT_RPC } from '../../chains/bnb.js';
 
 // ============================================================================
-// Backward-Compatible Exports (now config-driven)
-// ============================================================================
-
-const _defaultConfig = loadConfigSafe();
-
-/**
- * ERC-4337 EntryPoint v0.7 address (same on all EVM chains).
- * Now sourced from config; falls back to the well-known v0.7 address.
- */
-export const ENTRYPOINT_ADDRESS = _defaultConfig.entryPointAddress;
-
-/**
- * @deprecated Import from config module instead.
- * WazabiAccountFactory address — kept for backward compatibility.
- * Value is now derived from ACCOUNT_FACTORY_BSC env var via config.
- */
-export const WAZABI_ACCOUNT_FACTORY = _defaultConfig.accountFactoryAddresses['eip155:56'];
-
-/**
- * @deprecated Import from config module instead.
- * WazabiPaymaster addresses — kept for backward compatibility.
- * Values are now derived from PAYMASTER_BSC / PAYMASTER_BASE env vars via config.
- */
-export const WAZABI_PAYMASTERS = _defaultConfig.paymasterAddresses;
-
-/**
- * @deprecated Import from config module instead.
- * Wazabi Treasury address — kept for backward compatibility.
- * Value is now derived from TREASURY_PRIVATE_KEY env var via config.
- */
-export const WAZABI_TREASURY = _defaultConfig.treasuryAddress;
-
-// ============================================================================
-// Wallet Service Config
+// ERC-4337 Contract Addresses
 // ============================================================================
 
 /**
- * Configuration for the WalletService.
- * All fields are optional; missing values fall back to the centralized
- * FacilitatorEnvConfig loaded from environment variables.
+ * ERC-4337 EntryPoint v0.7 address (same on all EVM chains)
  */
-export interface WalletServiceConfig {
-  entryPointAddress?: `0x${string}`;
-  accountFactoryAddresses?: Record<string, `0x${string}`>;
-  paymasterAddresses?: Record<string, `0x${string}`>;
-  rpcUrls?: Record<string, string>;
-  bundlerUrls?: Record<string, string>;
-}
+export const ENTRYPOINT_ADDRESS = '0x0000000071727De22E5E9d8BAf0edAc6f37da032' as const;
 
-// Resolved (all-required) internal shape
-interface ResolvedWalletConfig {
-  entryPointAddress: `0x${string}`;
-  accountFactoryAddresses: Record<string, `0x${string}`>;
-  paymasterAddresses: Record<string, `0x${string}`>;
-  rpcUrls: Record<string, string>;
-  bundlerUrls: Record<string, string>;
-}
+/**
+ * WazabiAccountFactory address (deployed via CREATE2, same on all chains)
+ */
+export const WAZABI_ACCOUNT_FACTORY = '0x' + '0'.repeat(38) + '01' as `0x${string}`;
 
-// ============================================================================
-// ABI fragment for WazabiAccountFactory.createAccount
-// ============================================================================
+/**
+ * WazabiPaymaster address per network
+ */
+export const WAZABI_PAYMASTERS: Record<string, `0x${string}`> = {
+  'eip155:56': '0x' + '0'.repeat(38) + '02' as `0x${string}`,
+  'eip155:8453': '0x' + '0'.repeat(38) + '03' as `0x${string}`,
+} as const;
 
-const CREATE_ACCOUNT_ABI = [
-  {
-    type: 'function' as const,
-    name: 'createAccount',
-    inputs: [
-      { name: 'owner', type: 'address' as const },
-      { name: 'sessionKey', type: 'bytes32' as const },
-      { name: 'handle', type: 'string' as const },
-    ],
-    outputs: [{ name: '', type: 'address' as const }],
-    stateMutability: 'nonpayable' as const,
-  },
-] as const;
+/**
+ * Wazabi Treasury address (fee collection)
+ */
+export const WAZABI_TREASURY = '0x' + '0'.repeat(38) + '04' as `0x${string}`;
 
 // ============================================================================
-// Types
+// Wallet Service
 // ============================================================================
 
 export interface WalletDeploymentResult {
@@ -115,29 +52,18 @@ export interface SessionKeyPair {
   expires: Date;
 }
 
-// ============================================================================
-// Wallet Service
-// ============================================================================
-
 export class WalletService {
-  private readonly config: ResolvedWalletConfig;
+  private readonly rpcUrl: string;
 
-  constructor(config?: WalletServiceConfig) {
-    const defaults = loadConfigSafe();
-    this.config = {
-      entryPointAddress: config?.entryPointAddress ?? defaults.entryPointAddress,
-      accountFactoryAddresses: config?.accountFactoryAddresses ?? defaults.accountFactoryAddresses,
-      paymasterAddresses: config?.paymasterAddresses ?? defaults.paymasterAddresses,
-      rpcUrls: config?.rpcUrls ?? defaults.rpcUrls,
-      bundlerUrls: config?.bundlerUrls ?? defaults.bundlerUrls,
-    };
+  constructor(rpcUrl?: string) {
+    this.rpcUrl = rpcUrl ?? BSC_DEFAULT_RPC;
   }
 
   /**
    * Compute a deterministic ERC-4337 wallet address using CREATE2
    *
    * The address is derived from:
-   * - Factory address (WazabiAccountFactory, per-network from config)
+   * - Factory address (WazabiAccountFactory)
    * - Salt (derived from handle + owner)
    * - Init code hash (WazabiAccount bytecode + constructor args)
    *
@@ -148,12 +74,6 @@ export class WalletService {
     ownerAddress: string,
     sessionKeyPublic: string
   ): string {
-    // Use the BSC factory as the canonical address (same on all chains via CREATE2)
-    const factoryAddress: `0x${string}` =
-      this.config.accountFactoryAddresses['eip155:56'] ??
-      Object.values(this.config.accountFactoryAddresses)[0] ??
-      ('0x0000000000000000000000000000000000000001' as `0x${string}`);
-
     // Compute salt from handle, owner, and session key
     // Uses bytes32 for session key since it's a 32-byte hash, not a 20-byte address
     const salt = keccak256(
@@ -182,7 +102,7 @@ export class WalletService {
     // CREATE2 address computation: keccak256(0xff ++ factory ++ salt ++ initCodeHash)
     const create2Input = concat([
       '0xff' as `0x${string}`,
-      pad(factoryAddress, { size: 20 }),
+      pad(WAZABI_ACCOUNT_FACTORY, { size: 20 }),
       salt,
       initCodeHash,
     ]);
@@ -227,135 +147,27 @@ export class WalletService {
   }
 
   /**
-   * Deploy a wallet on a specific network via ERC-4337 bundler.
+   * Deploy a wallet on a specific network (lazy deployment)
    *
-   * Builds a UserOperation with initCode pointing to the WazabiAccountFactory,
-   * submits it to the configured bundler, and polls for confirmation.
-   *
-   * If no bundler URL is configured for the given network the call returns
-   * immediately with `{ deployed: false, reason: 'no bundler configured' }`.
+   * In production, this submits a UserOperation to the EntryPoint
+   * via the bundler. The wallet is deployed on the first transaction.
    */
   async deployWallet(
-    walletAddress: string,
-    network: string,
-    ownerAddress: string,
-    sessionKeyPublic: string,
-    handle: string
-  ): Promise<{ deployed: boolean; txHash?: string; reason?: string }> {
-    // 1. Verify bundler is configured
-    const bundlerUrl = this.config.bundlerUrls[network];
-    if (!bundlerUrl) {
-      console.warn(`[wallet] No bundler configured for ${network}, skipping deployment`);
-      return { deployed: false, reason: 'no bundler configured' };
-    }
+    _walletAddress: string,
+    _network: string,
+    _ownerAddress: string,
+    _sessionKeyPublic: string,
+    _handle: string
+  ): Promise<{ deployed: boolean; txHash?: string }> {
+    // In production:
+    // 1. Build UserOp with initCode (factory + createAccount calldata)
+    // 2. Sign UserOp
+    // 3. Submit to bundler
+    // 4. Wait for confirmation
 
-    // 2. Resolve factory address for this network
-    const factoryAddress = this.config.accountFactoryAddresses[network];
-    if (!factoryAddress) {
-      return { deployed: false, reason: `no factory address configured for ${network}` };
-    }
-
-    // 3. Encode factory calldata (createAccount)
-    const factoryData = encodeFunctionData({
-      abi: CREATE_ACCOUNT_ABI,
-      functionName: 'createAccount',
-      args: [
-        ownerAddress as `0x${string}`,
-        sessionKeyPublic as `0x${string}`,
-        handle,
-      ],
-    });
-
-    // 4. Resolve paymaster for this network
-    const paymasterAddress = this.config.paymasterAddresses[network];
-
-    // 5. Build UserOperation (ERC-4337 v0.7 format)
-    const userOp = {
-      sender: walletAddress,
-      nonce: toHex(0),
-      factory: factoryAddress,
-      factoryData,
-      callData: '0x' as Hex,
-      callGasLimit: toHex(500_000),
-      verificationGasLimit: toHex(1_500_000),
-      preVerificationGas: toHex(100_000),
-      maxFeePerGas: toHex(5_000_000_000),          // 5 gwei
-      maxPriorityFeePerGas: toHex(1_500_000_000),   // 1.5 gwei
-      paymaster: paymasterAddress ?? '0x',
-      paymasterVerificationGasLimit: toHex(300_000),
-      paymasterPostOpGasLimit: toHex(100_000),
-      paymasterData: '0x' as Hex,
-      signature: '0x' as Hex,                        // dummy sig for initial submission
-    };
-
-    // 6. Submit to bundler via JSON-RPC
-    let sendResult: { result?: string; error?: { message: string } };
-    try {
-      const sendResponse = await fetch(bundlerUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'eth_sendUserOperation',
-          params: [userOp, this.config.entryPointAddress],
-        }),
-      });
-      sendResult = (await sendResponse.json()) as typeof sendResult;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return { deployed: false, reason: `bundler request failed: ${message}` };
-    }
-
-    if (sendResult.error) {
-      return { deployed: false, reason: `bundler error: ${sendResult.error.message}` };
-    }
-
-    const userOpHash = sendResult.result;
-    if (!userOpHash) {
-      return { deployed: false, reason: 'no userOpHash returned from bundler' };
-    }
-
-    // 7. Poll for UserOperation receipt (up to 60 s)
-    const MAX_POLLS = 30;
-    const POLL_INTERVAL_MS = 2_000;
-
-    for (let i = 0; i < MAX_POLLS; i++) {
-      await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
-
-      try {
-        const receiptResponse = await fetch(bundlerUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: 1,
-            method: 'eth_getUserOperationReceipt',
-            params: [userOpHash],
-          }),
-        });
-
-        const receiptResult = (await receiptResponse.json()) as {
-          result?: {
-            success: boolean;
-            receipt: { transactionHash: string };
-          };
-          error?: { message: string };
-        };
-
-        if (receiptResult.result) {
-          return {
-            deployed: receiptResult.result.success,
-            txHash: receiptResult.result.receipt.transactionHash,
-          };
-        }
-        // null result means still pending — keep polling
-      } catch {
-        // Transient network error — keep polling
-      }
-    }
-
-    return { deployed: false, reason: 'timeout waiting for UserOperation receipt' };
+    // For now, return lazy deployment status
+    // Wallet will be deployed on first transaction
+    return { deployed: false };
   }
 
   /**
@@ -363,15 +175,9 @@ export class WalletService {
    */
   async isWalletDeployed(walletAddress: string, network: string): Promise<boolean> {
     try {
-      const rpcUrl = this.config.rpcUrls[network];
-      const chain = CHAIN_MAP[network];
-
-      if (!rpcUrl || !chain) {
-        return false;
-      }
-
+      const rpcUrl = this.getRpcForNetwork(network);
       const client = createPublicClient({
-        chain,
+        chain: bsc,
         transport: http(rpcUrl),
       });
 
@@ -397,5 +203,19 @@ export class WalletService {
       status[network] = await this.isWalletDeployed(walletAddress, network);
     }
     return status;
+  }
+
+  /**
+   * Get the RPC URL for a given network
+   */
+  private getRpcForNetwork(network: string): string {
+    switch (network) {
+      case 'eip155:56':
+        return 'https://bsc-dataseed.binance.org';
+      case 'eip155:8453':
+        return 'https://mainnet.base.org';
+      default:
+        return this.rpcUrl;
+    }
   }
 }
