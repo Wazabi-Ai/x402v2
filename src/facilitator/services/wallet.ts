@@ -21,40 +21,14 @@ import {
   toHex,
   type Hex,
 } from 'viem';
-import { loadConfigSafe, CHAIN_MAP } from '../config.js';
+import { CHAIN_MAP } from '../config.js';
 
-// ============================================================================
-// Backward-Compatible Exports (now config-driven)
-// ============================================================================
+// Well-known ERC-4337 EntryPoint v0.7 address (same on all EVM chains)
+const DEFAULT_ENTRYPOINT = '0x0000000071727De22E5E9d8BAf0edAc6f37da032' as `0x${string}`;
 
-const _defaultConfig = loadConfigSafe();
-
-/**
- * ERC-4337 EntryPoint v0.7 address (same on all EVM chains).
- * Now sourced from config; falls back to the well-known v0.7 address.
- */
-export const ENTRYPOINT_ADDRESS = _defaultConfig.entryPointAddress;
-
-/**
- * @deprecated Import from config module instead.
- * WazabiAccountFactory address — kept for backward compatibility.
- * Value is now derived from ACCOUNT_FACTORY_BSC env var via config.
- */
-export const WAZABI_ACCOUNT_FACTORY = _defaultConfig.accountFactoryAddresses['eip155:56'];
-
-/**
- * @deprecated Import from config module instead.
- * WazabiPaymaster addresses — kept for backward compatibility.
- * Values are now derived from PAYMASTER_BSC / PAYMASTER_BASE env vars via config.
- */
-export const WAZABI_PAYMASTERS = _defaultConfig.paymasterAddresses;
-
-/**
- * @deprecated Import from config module instead.
- * Wazabi Treasury address — kept for backward compatibility.
- * Value is now derived from TREASURY_PRIVATE_KEY env var via config.
- */
-export const WAZABI_TREASURY = _defaultConfig.treasuryAddress;
+// Default public RPCs (used when no RPC URL is explicitly provided)
+const DEFAULT_RPC_BSC = 'https://bsc-dataseed.binance.org';
+const DEFAULT_RPC_BASE = 'https://mainnet.base.org';
 
 // ============================================================================
 // Wallet Service Config
@@ -123,13 +97,15 @@ export class WalletService {
   private readonly config: ResolvedWalletConfig;
 
   constructor(config?: WalletServiceConfig) {
-    const defaults = loadConfigSafe();
     this.config = {
-      entryPointAddress: config?.entryPointAddress ?? defaults.entryPointAddress,
-      accountFactoryAddresses: config?.accountFactoryAddresses ?? defaults.accountFactoryAddresses,
-      paymasterAddresses: config?.paymasterAddresses ?? defaults.paymasterAddresses,
-      rpcUrls: config?.rpcUrls ?? defaults.rpcUrls,
-      bundlerUrls: config?.bundlerUrls ?? defaults.bundlerUrls,
+      entryPointAddress: config?.entryPointAddress ?? DEFAULT_ENTRYPOINT,
+      accountFactoryAddresses: config?.accountFactoryAddresses ?? {},
+      paymasterAddresses: config?.paymasterAddresses ?? {},
+      rpcUrls: config?.rpcUrls ?? {
+        'eip155:56': DEFAULT_RPC_BSC,
+        'eip155:8453': DEFAULT_RPC_BASE,
+      },
+      bundlerUrls: config?.bundlerUrls ?? {},
     };
   }
 
@@ -245,14 +221,19 @@ export class WalletService {
     // 1. Verify bundler is configured
     const bundlerUrl = this.config.bundlerUrls[network];
     if (!bundlerUrl) {
-      console.warn(`[wallet] No bundler configured for ${network}, skipping deployment`);
-      return { deployed: false, reason: 'no bundler configured' };
+      throw new Error(
+        `No bundler URL configured for network "${network}". ` +
+        'Set the BUNDLER_URL_BSC / BUNDLER_URL_BASE environment variable.'
+      );
     }
 
     // 2. Resolve factory address for this network
     const factoryAddress = this.config.accountFactoryAddresses[network];
     if (!factoryAddress) {
-      return { deployed: false, reason: `no factory address configured for ${network}` };
+      throw new Error(
+        `No account factory address configured for network "${network}". ` +
+        'Set the ACCOUNT_FACTORY_BSC / ACCOUNT_FACTORY_BASE environment variable.'
+      );
     }
 
     // 3. Encode factory calldata (createAccount)

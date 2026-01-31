@@ -1,11 +1,32 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Express, Request, Response } from 'express';
+import type { PublicClient, WalletClient } from 'viem';
 import { InMemoryStore } from '../src/facilitator/db/schema.js';
 import { createFacilitator } from '../src/facilitator/server.js';
 import {
   HANDLE_SUFFIX,
   SETTLEMENT_FEE_BPS,
 } from '../src/facilitator/types.js';
+
+// Mock viem clients for testing
+const MOCK_TREASURY = '0x1111111111111111111111111111111111111111' as `0x${string}`;
+
+const mockPublicClient = {
+  readContract: async () => BigInt('1000000000000000000000'),
+  waitForTransactionReceipt: async () => ({ status: 'success' as const }),
+} as unknown as PublicClient;
+
+const mockWalletClient = {
+  writeContract: async () => ('0x' + 'ab'.repeat(32)) as `0x${string}`,
+  account: { address: MOCK_TREASURY },
+  chain: { id: 8453 },
+} as unknown as WalletClient;
+
+const mockClients = {
+  treasuryAddress: MOCK_TREASURY,
+  publicClients: { 'eip155:8453': mockPublicClient, 'eip155:56': mockPublicClient } as Record<string, PublicClient>,
+  walletClients: { 'eip155:8453': mockWalletClient, 'eip155:56': mockWalletClient } as Record<string, WalletClient>,
+};
 
 // ============================================================================
 // Mock Express
@@ -109,7 +130,7 @@ describe('Facilitator Server', () => {
     store = new InMemoryStore();
     const mock = createMockApp();
     routes = mock.routes;
-    createFacilitator(mock.app, { store, cors: false });
+    createFacilitator(mock.app, { store, cors: false, ...mockClients });
   });
 
   // ========================================================================
