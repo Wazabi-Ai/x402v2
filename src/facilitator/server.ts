@@ -538,7 +538,7 @@ When encountering an HTTP 402 response:
 
 ## Supported Networks
 - Ethereum (eip155:1): USDC, USDT, WETH
-- BNB Chain (eip155:56): USDT, USDC, BUSD, WBNB
+- BNB Chain (eip155:56): USDT, USDC, WBNB
 - Base (eip155:8453): USDC
 
 ## Handle Format

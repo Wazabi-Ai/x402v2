@@ -7,7 +7,6 @@ import {
   BSC_BLOCK_EXPLORER,
   BSC_USDT,
   BSC_USDC,
-  BSC_BUSD,
   BSC_WBNB,
   BSC_DEFAULT_TOKEN,
   BSC_TOKENS,
@@ -95,14 +94,6 @@ describe('Token Configurations', () => {
     });
   });
 
-  describe('BSC_BUSD', () => {
-    it('should have correct configuration', () => {
-      expect(BSC_BUSD.address).toBe('0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56');
-      expect(BSC_BUSD.symbol).toBe('BUSD');
-      expect(BSC_BUSD.decimals).toBe(18);
-    });
-  });
-
   describe('BSC_WBNB', () => {
     it('should have correct configuration', () => {
       expect(BSC_WBNB.address).toBe('0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c');
@@ -121,12 +112,11 @@ describe('Token Configurations', () => {
     it('should contain all tokens', () => {
       expect(BSC_TOKENS.USDT).toEqual(BSC_USDT);
       expect(BSC_TOKENS.USDC).toEqual(BSC_USDC);
-      expect(BSC_TOKENS.BUSD).toEqual(BSC_BUSD);
       expect(BSC_TOKENS.WBNB).toEqual(BSC_WBNB);
     });
 
-    it('should have 4 tokens', () => {
-      expect(Object.keys(BSC_TOKENS)).toHaveLength(4);
+    it('should have 3 tokens', () => {
+      expect(Object.keys(BSC_TOKENS)).toHaveLength(3);
     });
   });
 
@@ -134,7 +124,6 @@ describe('Token Configurations', () => {
     it('should map lowercase addresses to tokens', () => {
       expect(BSC_TOKEN_BY_ADDRESS[BSC_USDT.address.toLowerCase()]).toEqual(BSC_USDT);
       expect(BSC_TOKEN_BY_ADDRESS[BSC_USDC.address.toLowerCase()]).toEqual(BSC_USDC);
-      expect(BSC_TOKEN_BY_ADDRESS[BSC_BUSD.address.toLowerCase()]).toEqual(BSC_BUSD);
       expect(BSC_TOKEN_BY_ADDRESS[BSC_WBNB.address.toLowerCase()]).toEqual(BSC_WBNB);
     });
   });
@@ -198,7 +187,6 @@ describe('getTokenBySymbol', () => {
   it('should find token by symbol', () => {
     expect(getTokenBySymbol('USDT')).toEqual(BSC_USDT);
     expect(getTokenBySymbol('USDC')).toEqual(BSC_USDC);
-    expect(getTokenBySymbol('BUSD')).toEqual(BSC_BUSD);
     expect(getTokenBySymbol('WBNB')).toEqual(BSC_WBNB);
   });
 
@@ -218,7 +206,6 @@ describe('isTokenSupported', () => {
   it('should return true for supported tokens', () => {
     expect(isTokenSupported(BSC_USDT.address)).toBe(true);
     expect(isTokenSupported(BSC_USDC.address)).toBe(true);
-    expect(isTokenSupported(BSC_BUSD.address)).toBe(true);
     expect(isTokenSupported(BSC_WBNB.address)).toBe(true);
   });
 

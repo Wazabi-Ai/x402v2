@@ -74,7 +74,7 @@ The middleware returns `402` with payment details to unsigned requests, and veri
 | Network | ID | Tokens |
 |---------|----|--------|
 | Ethereum | `eip155:1` | USDC (6d), USDT (6d), WETH (18d) |
-| BNB Chain | `eip155:56` | USDT (18d), USDC (18d), BUSD (18d), WBNB (18d) |
+| BNB Chain | `eip155:56` | USDT (18d), USDC (18d), WBNB (18d) |
 | Base | `eip155:8453` | USDC (6d) |
 
 ## Installation
@@ -169,7 +169,7 @@ import {
   formatEthTokenAmount, parseEthTokenAmount,
 
   // BNB Chain
-  BSC_USDT, BSC_USDC, BSC_BUSD, BSC_WBNB, BSC_CAIP_ID,
+  BSC_USDT, BSC_USDC, BSC_WBNB, BSC_CAIP_ID,
   formatTokenAmount, parseTokenAmount,
 
   // Base
@@ -264,6 +264,23 @@ RPC_BASE=https://mainnet.base.org
 DATABASE_URL=postgresql://...       # defaults to in-memory
 PORT=3000
 ```
+
+## OpenClaw (AI Agent Integration)
+
+The Facilitator exposes an **OpenClaw skill** at `GET /skill.md` -- a machine-readable markdown file that AI agents can discover and use to interact with the x402 payment protocol.
+
+```bash
+curl http://localhost:3000/skill.md
+```
+
+This enables any OpenClaw-compatible agent to:
+
+- **Register** a handle and get a smart wallet across all supported chains
+- **Check balances** and transaction history
+- **Make payments** between agents or addresses via the `/settle` endpoint
+- **Accept payments** by embedding x402 headers in HTTP responses
+
+No special SDK needed on the agent side -- just HTTP and the skill file.
 
 ## Smart contracts
 
