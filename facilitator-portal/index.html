@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Wazabi x402 Facilitator — Agent Payment Rails</title>
+  <meta name="description" content="The payment rails for the agent economy. Register handles, deploy ERC-4337 wallets, and settle payments with 0.5% fees." />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    /* EDO font — self-hosted @font-face fallback to Chakra Petch from Google */
+    @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&display=swap');
+  </style>
+  <link rel="stylesheet" href="/styles/main.css" />
+</head>
+<body>
+  <!-- ================================================================== -->
+  <!-- Navigation                                                         -->
+  <!-- ================================================================== -->
+  <nav class="nav" id="nav">
+    <div class="nav-inner">
+      <a href="#" class="nav-brand">
+        <span class="nav-logo">W</span>
+        <span class="nav-title">wazabi<span class="text-gradient">x402</span></span>
+      </a>
+      <div class="nav-links" id="navLinks">
+        <a href="#register">Register</a>
+        <a href="#lookup">Lookup</a>
+        <a href="#settle">Settle</a>
+        <a href="#history">History</a>
+        <a href="#api">API</a>
+      </div>
+      <div class="nav-actions">
+        <a href="#register" class="btn btn-primary btn-sm">Get Handle</a>
+        <button class="nav-toggle" id="navToggle" aria-label="Toggle menu">
+          <span></span><span></span><span></span>
+        </button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ================================================================== -->
+  <!-- Hero Section                                                       -->
+  <!-- ================================================================== -->
+  <section class="hero" id="hero">
+    <div class="hero-bg"></div>
+    <div class="container">
+      <div class="hero-content">
+        <div class="hero-badge">
+          <span class="badge-dot"></span>
+          Facilitator — Agent Financial Platform
+        </div>
+        <h1 class="hero-title">
+          Payment Rails for the<br />
+          <span class="text-gradient">Agent Economy</span>
+        </h1>
+        <p class="hero-subtitle">
+          Register a <code>name.wazabi-x402</code> handle, get an ERC-4337 smart wallet,
+          and start transacting across BNB Chain and Base. No private keys to manage.
+          0.5% settlement fee. Works with or without registration.
+        </p>
+        <div class="hero-actions">
+          <a href="#register" class="btn btn-primary btn-lg">Register Handle</a>
+          <a href="#lookup" class="btn btn-secondary btn-lg">Lookup Handle</a>
+        </div>
+        <div class="hero-stats">
+          <div class="stat">
+            <div class="stat-value">ERC-4337</div>
+            <div class="stat-label">Smart Wallets</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">0.5%</div>
+            <div class="stat-label">Settlement Fee</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">2 Chains</div>
+            <div class="stat-label">BNB + Base</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">.wazabi-x402</div>
+            <div class="stat-label">Handle Format</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================== -->
+  <!-- Register Section                                                   -->
+  <!-- ================================================================== -->
+  <section class="section" id="register">
+    <div class="container">
+      <div class="section-header">
+        <h2 class="section-title">Register <span class="text-gradient">Handle</span></h2>
+        <p class="section-subtitle">Create your agent identity and deploy an ERC-4337 smart wallet</p>
+      </div>
+      <div class="card card-interactive">
+        <form id="registerForm" class="form">
+          <div class="form-row">
+            <div class="form-group form-group-handle">
+              <label class="form-label" for="handleInput">Handle</label>
+              <div class="input-with-suffix">
+                <input
+                  type="text"
+                  id="handleInput"
+                  class="form-input"
+                  placeholder="molty"
+                  pattern="[a-z0-9][a-z0-9_-]{1,48}[a-z0-9]"
+                  minlength="3"
+                  maxlength="50"
+                  required
+                />
+                <span class="input-suffix">.wazabi-x402</span>
+              </div>
+              <div class="form-hint">3-50 chars, lowercase alphanumeric, hyphens, underscores</div>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Networks</label>
+              <div class="checkbox-group">
+                <label class="checkbox-label">
+                  <input type="checkbox" name="networks" value="eip155:56" checked />
+                  <span class="checkbox-custom"></span>
+                  BNB Chain
+                </label>
+                <label class="checkbox-label">
+                  <input type="checkbox" name="networks" value="eip155:8453" checked />
+                  <span class="checkbox-custom"></span>
+                  Base
+                </label>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="ownerInput">Recovery Address <span class="form-optional">(optional)</span></label>
+              <input
+                type="text"
+                id="ownerInput"
+                class="form-input"
+                placeholder="0x..."
+              />
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary btn-lg btn-full" id="registerBtn">
+            Register Handle
+          </button>
+        </form>
+
+        <!-- Registration Result -->
+        <div id="registerResult" class="result-panel" hidden>
+          <div class="result-header">
+            <span class="result-icon result-success">&#10003;</span>
+            <h3 class="result-title">Handle Registered</h3>
+          </div>
+          <div class="result-body">
+            <div class="result-field">
+              <span class="result-label">Handle</span>
+              <span class="result-value" id="resultHandle"></span>
+            </div>
+            <div class="result-field">
+              <span class="result-label">Wallet Address</span>
+              <span class="result-value result-mono" id="resultWallet"></span>
+              <button class="btn-copy" data-copy="resultWallet" title="Copy">&#x2398;</button>
+            </div>
+            <div class="result-field">
+              <span class="result-label">Wallet Type</span>
+              <span class="result-value" id="resultWalletType"></span>
+            </div>
+            <div class="result-field result-field-warn">
+              <span class="result-label">Session Key (Private)</span>
+              <span class="result-value result-mono result-secret" id="resultSessionKey"></span>
+              <button class="btn-copy" data-copy="resultSessionKey" title="Copy">&#x2398;</button>
+            </div>
+            <div class="result-warning">
+              Save your session key now. It is returned only once.
+            </div>
+          </div>
+        </div>
+
+        <!-- Error Display -->
+        <div id="registerError" class="result-panel result-panel-error" hidden>
+          <div class="result-header">
+            <span class="result-icon result-error">&#10007;</span>
+            <h3 class="result-title" id="registerErrorTitle">Registration Failed</h3>
+          </div>
+          <p class="result-error-msg" id="registerErrorMsg"></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================== -->
+  <!-- Lookup Section                                                     -->
+  <!-- ================================================================== -->
+  <section class="section section-alt" id="lookup">
+    <div class="container">
+      <div class="section-header">
+        <h2 class="section-title">Lookup <span class="text-gradient">Handle</span></h2>
+        <p class="section-subtitle">Resolve a handle to its wallet address, check balances, or view a full profile</p>
+      </div>
+      <div class="card card-interactive">
+        <div class="tabs" id="lookupTabs">
+          <button class="tab active" data-tab="resolve">Resolve</button>
+          <button class="tab" data-tab="balance">Balance</button>
+          <button class="tab" data-tab="profile">Profile</button>
+        </div>
+
+        <form id="lookupForm" class="form">
+          <div class="form-row">
+            <div class="form-group" style="flex: 1">
+              <label class="form-label" for="lookupHandle">Handle or Address</label>
+              <input
+                type="text"
+                id="lookupHandle"
+                class="form-input"
+                placeholder="molty.wazabi-x402 or 0x..."
+                required
+              />
+            </div>
+            <button type="submit" class="btn btn-primary btn-lg" id="lookupBtn" style="align-self: flex-end">
+              Lookup
+            </button>
+          </div>
+        </form>
+
+        <div id="lookupResult" class="result-panel" hidden></div>
+        <div id="lookupError" class="result-panel result-panel-error" hidden>
+          <div class="result-header">
+            <span class="result-icon result-error">&#10007;</span>
+            <h3 class="result-title">Not Found</h3>
+          </div>
+          <p class="result-error-msg" id="lookupErrorMsg"></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================== -->
+  <!-- Settle Section                                                     -->
+  <!-- ================================================================== -->
+  <section class="section" id="settle">
+    <div class="container">
+      <div class="section-header">
+        <h2 class="section-title">Settle <span class="text-gradient">Payment</span></h2>
+        <p class="section-subtitle">Send a payment between handles or raw addresses. 0.5% fee applies.</p>
+      </div>
+      <div class="card card-interactive">
+        <form id="settleForm" class="form">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="settleFrom">From (handle or address)</label>
+              <input type="text" id="settleFrom" class="form-input" placeholder="molty or 0x..." required />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="settleTo">To (handle or address)</label>
+              <input type="text" id="settleTo" class="form-input" placeholder="agent-b or 0x..." required />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="settleAmount">Amount</label>
+              <input type="text" id="settleAmount" class="form-input" placeholder="10.00" required />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="settleToken">Token</label>
+              <select id="settleToken" class="form-input form-select">
+                <option value="USDC">USDC</option>
+                <option value="USDT">USDT</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="settleNetwork">Network</label>
+              <select id="settleNetwork" class="form-input form-select">
+                <option value="eip155:8453">Base</option>
+                <option value="eip155:56">BNB Chain</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Fee Preview -->
+          <div class="fee-preview" id="feePreview">
+            <div class="fee-row">
+              <span>Gross</span>
+              <span id="feeGross">--</span>
+            </div>
+            <div class="fee-row">
+              <span>Fee (0.5%)</span>
+              <span id="feeFee">--</span>
+            </div>
+            <div class="fee-row">
+              <span>Est. Gas</span>
+              <span id="feeGas">--</span>
+            </div>
+            <div class="fee-row fee-row-total">
+              <span>Net to Recipient</span>
+              <span id="feeNet">--</span>
+            </div>
+          </div>
+
+          <button type="submit" class="btn btn-primary btn-lg btn-full" id="settleBtn">
+            Settle Payment
+          </button>
+        </form>
+
+        <div id="settleResult" class="result-panel" hidden></div>
+        <div id="settleError" class="result-panel result-panel-error" hidden></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================== -->
+  <!-- History Section                                                    -->
+  <!-- ================================================================== -->
+  <section class="section section-alt" id="history">
+    <div class="container">
+      <div class="section-header">
+        <h2 class="section-title">Transaction <span class="text-gradient">History</span></h2>
+        <p class="section-subtitle">View payment history for any registered handle or wallet address</p>
+      </div>
+      <div class="card card-interactive">
+        <form id="historyForm" class="form">
+          <div class="form-row">
+            <div class="form-group" style="flex: 1">
+              <label class="form-label" for="historyHandle">Handle or Address</label>
+              <input type="text" id="historyHandle" class="form-input" placeholder="molty.wazabi-x402 or 0x..." required />
+            </div>
+            <button type="submit" class="btn btn-primary btn-lg" style="align-self: flex-end">
+              Load History
+            </button>
+          </div>
+        </form>
+
+        <div id="historyResult" hidden>
+          <div class="table-wrap">
+            <table class="table" id="historyTable">
+              <thead>
+                <tr>
+                  <th>Type</th>
+                  <th>Amount</th>
+                  <th>Fee</th>
+                  <th>Token</th>
+                  <th>Counterparty</th>
+                  <th>Network</th>
+                  <th>Time</th>
+                </tr>
+              </thead>
+              <tbody id="historyBody"></tbody>
+            </table>
+          </div>
+          <div class="pagination" id="historyPagination"></div>
+        </div>
+        <div id="historyEmpty" class="empty-state" hidden>
+          <p>No transactions found.</p>
+        </div>
+        <div id="historyError" class="result-panel result-panel-error" hidden></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================== -->
+  <!-- API Reference Section                                              -->
+  <!-- ================================================================== -->
+  <section class="section" id="api">
+    <div class="container">
+      <div class="section-header">
+        <h2 class="section-title">API <span class="text-gradient">Reference</span></h2>
+        <p class="section-subtitle">All endpoints available at <code>facilitator.wazabi.ai</code></p>
+      </div>
+      <div class="api-grid">
+        <div class="api-card">
+          <div class="api-method api-post">POST</div>
+          <div class="api-path">/register</div>
+          <p class="api-desc">Create a <code>.wazabi-x402</code> handle and deploy an ERC-4337 smart wallet</p>
+        </div>
+        <div class="api-card">
+          <div class="api-method api-get">GET</div>
+          <div class="api-path">/resolve/:handle</div>
+          <p class="api-desc">Resolve a handle to its wallet address and deployment status</p>
+        </div>
+        <div class="api-card">
+          <div class="api-method api-get">GET</div>
+          <div class="api-path">/balance/:handle</div>
+          <p class="api-desc">Check token balances across all supported chains</p>
+        </div>
+        <div class="api-card">
+          <div class="api-method api-get">GET</div>
+          <div class="api-path">/history/:handle</div>
+          <p class="api-desc">View transaction history with pagination</p>
+        </div>
+        <div class="api-card">
+          <div class="api-method api-get">GET</div>
+          <div class="api-path">/profile/:handle</div>
+          <p class="api-desc">Full agent profile with balances, metadata, and stats</p>
+        </div>
+        <div class="api-card">
+          <div class="api-method api-post">POST</div>
+          <div class="api-path">/verify</div>
+          <p class="api-desc">Verify a payment — works with handles or raw addresses</p>
+        </div>
+        <div class="api-card">
+          <div class="api-method api-post">POST</div>
+          <div class="api-path">/settle</div>
+          <p class="api-desc">Execute a payment with 0.5% fee. No registration required for raw addresses.</p>
+        </div>
+        <div class="api-card">
+          <div class="api-method api-get">GET</div>
+          <div class="api-path">/supported</div>
+          <p class="api-desc">List supported networks, tokens, and fee schedule</p>
+        </div>
+        <div class="api-card">
+          <div class="api-method api-get">GET</div>
+          <div class="api-path">/skill.md</div>
+          <p class="api-desc">OpenClaw skill file — plug-and-play payment capability for agents</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================== -->
+  <!-- Networks Section                                                   -->
+  <!-- ================================================================== -->
+  <section class="section section-alt" id="networks">
+    <div class="container">
+      <div class="section-header">
+        <h2 class="section-title">Supported <span class="text-gradient">Networks</span></h2>
+      </div>
+      <div class="network-grid">
+        <div class="network-card">
+          <div class="network-icon">&#9671;</div>
+          <h3>BNB Chain</h3>
+          <div class="network-id">eip155:56</div>
+          <div class="token-list">
+            <span class="token-badge">USDT</span>
+            <span class="token-badge">USDC</span>
+            <span class="token-badge">BUSD</span>
+            <span class="token-badge">WBNB</span>
+          </div>
+        </div>
+        <div class="network-card">
+          <div class="network-icon">&#9677;</div>
+          <h3>Base</h3>
+          <div class="network-id">eip155:8453</div>
+          <div class="token-list">
+            <span class="token-badge">USDC</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================== -->
+  <!-- Footer                                                             -->
+  <!-- ================================================================== -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-inner">
+        <div class="footer-brand">
+          <span class="nav-logo">W</span>
+          <span class="nav-title">wazabi<span class="text-gradient">x402</span></span>
+          <p class="footer-desc">The payment rails for the agent economy.</p>
+        </div>
+        <div class="footer-links">
+          <div class="footer-col">
+            <h4>Platform</h4>
+            <a href="#register">Register</a>
+            <a href="#lookup">Lookup</a>
+            <a href="#settle">Settle</a>
+            <a href="#history">History</a>
+          </div>
+          <div class="footer-col">
+            <h4>Resources</h4>
+            <a href="#api">API Reference</a>
+            <a href="/skill.md">OpenClaw Skill</a>
+            <a href="#networks">Networks</a>
+          </div>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p>&copy; 2026 Wazabi.ai &mdash; Confidential</p>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Status Toast -->
+  <div id="toast" class="toast" hidden></div>
+
+  <script type="module" src="/scripts/main.js"></script>
+</body>
+</html>
