@@ -65,8 +65,8 @@ export function loadConfig(): FacilitatorEnvConfig {
     },
 
     bundlerUrls: {
-      'eip155:56': process.env['BUNDLER_URL_BSC'] || '',
-      'eip155:8453': process.env['BUNDLER_URL_BASE'] || '',
+      'eip155:56': requireEnv('BUNDLER_URL_BSC'),
+      'eip155:8453': requireEnv('BUNDLER_URL_BASE'),
     },
 
     databaseUrl: process.env['DATABASE_URL'],
@@ -75,35 +75,6 @@ export function loadConfig(): FacilitatorEnvConfig {
   };
 }
 
-// Lenient loader for dev/testing - uses placeholders instead of throwing
-export function loadConfigSafe(): FacilitatorEnvConfig {
-  try {
-    return loadConfig();
-  } catch {
-    console.warn('[config] Missing required env vars, running in DEMO MODE with placeholder values');
-    return {
-      treasuryPrivateKey: '0x0000000000000000000000000000000000000000000000000000000000000001' as `0x${string}`,
-      treasuryAddress: '0x0000000000000000000000000000000000000004' as `0x${string}`,
-      entryPointAddress: DEFAULT_ENTRYPOINT,
-      accountFactoryAddresses: {
-        'eip155:56': '0x0000000000000000000000000000000000000001' as `0x${string}`,
-        'eip155:8453': '0x0000000000000000000000000000000000000001' as `0x${string}`,
-      },
-      paymasterAddresses: {
-        'eip155:56': '0x0000000000000000000000000000000000000002' as `0x${string}`,
-        'eip155:8453': '0x0000000000000000000000000000000000000003' as `0x${string}`,
-      },
-      rpcUrls: {
-        'eip155:56': DEFAULT_RPC_BSC,
-        'eip155:8453': DEFAULT_RPC_BASE,
-      },
-      bundlerUrls: { 'eip155:56': '', 'eip155:8453': '' },
-      databaseUrl: undefined,
-      port: 3000,
-      portalDir: undefined,
-    };
-  }
-}
 
 function requireEnv(name: string): string {
   const value = process.env[name];

@@ -3,11 +3,8 @@
  *
  * Handles payment settlement with 0.5% fee collection.
  *
- * Supports two operating modes:
- *   1. Live mode  -- when SettlementConfig is provided, executes real on-chain
- *      ERC-20 transfers from the treasury wallet to the recipient.
- *   2. Demo mode  -- when no config is provided, simulates settlement with
- *      generated transaction hashes (suitable for testing / demos).
+ * Requires a SettlementConfig with treasury wallet and viem clients to
+ * execute real on-chain ERC-20 transfers.
  *
  * Supports two identity types:
  *   1. Registered agents -- identified by handle (e.g., "molty" or "molty.wazabi-x402")
@@ -16,7 +13,7 @@
  * Registration is NOT required. Any valid Ethereum address can use /settle and /verify.
  * Registered agents get additional benefits (handles, gasless UX, history tracking).
  *
- * Settlement flow (live mode):
+ * Settlement flow:
  *   - The payer has already transferred the full gross amount to the treasury
  *     via the verified x402 payment authorization.
  *   - The treasury wallet forwards the net amount (gross minus 0.5% fee) to
@@ -35,7 +32,6 @@ import {
   calculateNet,
   isAddress,
 } from '../types.js';
-import { WAZABI_TREASURY } from './wallet.js';
 import { getTokenForNetwork } from '../../chains/index.js';
 import type { HandleService } from './handle.js';
 
@@ -68,10 +64,10 @@ const erc20Abi = [
 // ============================================================================
 
 /**
- * Configuration for live on-chain settlement.
+ * Configuration for on-chain settlement.
  *
- * When provided to SettlementService, enables real ERC-20 transfers.
- * When omitted, the service falls back to demo/simulation mode.
+ * Required. Contains treasury wallet and viem clients for executing
+ * real ERC-20 transfers on supported networks.
  */
 export interface SettlementConfig {
   /** Treasury wallet address that holds funds and executes transfers */
@@ -105,23 +101,16 @@ function parseAmountToUnits(amount: string, decimals: number): bigint {
 export class SettlementService {
   private readonly handleService: HandleService;
   private readonly store: InMemoryStore;
-  private readonly config?: SettlementConfig;
+  private readonly config: SettlementConfig;
 
   constructor(
     handleService: HandleService,
     store: InMemoryStore,
-    config?: SettlementConfig
+    config: SettlementConfig
   ) {
     this.handleService = handleService;
     this.store = store;
     this.config = config;
-  }
-
-  /**
-   * Whether the service is configured for real on-chain settlement.
-   */
-  get isLiveMode(): boolean {
-    return this.config !== undefined;
   }
 
   /**
@@ -137,10 +126,8 @@ export class SettlementService {
    * Accepts both registered handles and raw wallet addresses as sender/recipient.
    * Registration is optional -- unregistered addresses are treated as pass-through.
    *
-   * In live mode the treasury wallet executes an ERC-20 transfer of the net
-   * amount to the recipient. The 0.5% fee is retained in the treasury.
-   *
-   * In demo mode a simulated tx hash is generated and returned immediately.
+   * The treasury wallet executes an ERC-20 transfer of the net amount to the
+   * recipient. The 0.5% fee is retained in the treasury.
    */
   async settle(request: SettleRequest): Promise<SettleResponse> {
     const { from, to, amount, token, network } = request;
@@ -212,48 +199,34 @@ export class SettlementService {
 
     await this.store.createTransaction(transaction);
 
-    // ------------------------------------------------------------------
-    // Determine settlement mode based on available clients
-    // ------------------------------------------------------------------
+    // Resolve clients for the target network
+    const publicClient = this.config.publicClients[network];
+    const walletClient = this.config.walletClients[network];
 
-    const publicClient = this.config?.publicClients[network];
-    const walletClient = this.config?.walletClients[network];
-    const treasuryAddress = this.config?.treasuryAddress;
-
-    if (publicClient && walletClient && treasuryAddress) {
-      // ================================================================
-      // LIVE ON-CHAIN SETTLEMENT
-      // ================================================================
-      return this.executeLiveSettlement({
-        transaction,
-        publicClient,
-        walletClient,
-        treasuryAddress,
-        toAddress,
-        toIdentifier,
-        fromIdentifier,
-        amount,
-        token,
-        network,
-        fee,
-        estimatedGas,
-        net,
-      });
-    } else {
-      // ================================================================
-      // DEMO MODE: Simulated settlement (no wallet clients configured)
-      // ================================================================
-      return this.executeDemoSettlement({
-        transaction,
-        fromIdentifier,
-        toIdentifier,
-        amount,
-        fee,
-        estimatedGas,
-        net,
-        network,
-      });
+    if (!publicClient || !walletClient) {
+      await this.store.updateTransactionStatus(transaction.id, 'failed');
+      throw new SettlementError(
+        `No clients configured for network "${network}". ` +
+        'Ensure PUBLIC_CLIENT and WALLET_CLIENT are available for this chain.',
+        'NETWORK_NOT_CONFIGURED'
+      );
     }
+
+    return this.executeLiveSettlement({
+      transaction,
+      publicClient,
+      walletClient,
+      treasuryAddress: this.config.treasuryAddress,
+      toAddress,
+      toIdentifier,
+      fromIdentifier,
+      amount,
+      token,
+      network,
+      fee,
+      estimatedGas,
+      net,
+    });
   }
 
   // ------------------------------------------------------------------
@@ -405,56 +378,6 @@ export class SettlementService {
         'SETTLEMENT_FAILED'
       );
     }
-  }
-
-  // ------------------------------------------------------------------
-  // Demo / simulated settlement
-  // ------------------------------------------------------------------
-
-  private async executeDemoSettlement(params: {
-    transaction: Transaction;
-    fromIdentifier: string;
-    toIdentifier: string;
-    amount: string;
-    fee: string;
-    estimatedGas: string;
-    net: string;
-    network: string;
-  }): Promise<SettleResponse> {
-    const {
-      transaction,
-      fromIdentifier,
-      toIdentifier,
-      amount,
-      fee,
-      estimatedGas,
-      net,
-      network,
-    } = params;
-
-    // Generate a deterministic-looking simulated tx hash
-    const simulatedTxHash =
-      `0x${randomUUID().replace(/-/g, '')}${randomUUID().replace(/-/g, '').slice(0, 32)}`;
-
-    await this.store.updateTransactionStatus(
-      transaction.id,
-      'confirmed',
-      simulatedTxHash
-    );
-
-    return {
-      success: true,
-      tx_hash: simulatedTxHash,
-      settlement: {
-        gross: amount,
-        fee,
-        gas: estimatedGas,
-        net,
-      },
-      from: fromIdentifier,
-      to: toIdentifier,
-      network,
-    };
   }
 
   /**
@@ -618,7 +541,7 @@ export class SettlementService {
       rate: SETTLEMENT_FEE_RATE,
       bps: SETTLEMENT_FEE_BPS,
       description: '0.5% settlement fee on every transaction',
-      treasury: this.config?.treasuryAddress ?? WAZABI_TREASURY,
+      treasury: this.config.treasuryAddress,
     };
   }
 }

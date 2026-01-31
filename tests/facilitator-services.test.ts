@@ -1,8 +1,30 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import type { PublicClient, WalletClient } from 'viem';
 import { InMemoryStore } from '../src/facilitator/db/schema.js';
 import { HandleService, HandleError } from '../src/facilitator/services/handle.js';
 import { SettlementService, SettlementError } from '../src/facilitator/services/settlement.js';
+import type { SettlementConfig } from '../src/facilitator/services/settlement.js';
 import { WalletService } from '../src/facilitator/services/wallet.js';
+
+// Mock viem clients for settlement tests
+const MOCK_TREASURY = '0x1111111111111111111111111111111111111111' as `0x${string}`;
+
+const mockPublicClient = {
+  readContract: async () => BigInt('1000000000000000000000'),
+  waitForTransactionReceipt: async () => ({ status: 'success' as const }),
+} as unknown as PublicClient;
+
+const mockWalletClient = {
+  writeContract: async () => ('0x' + 'ab'.repeat(32)) as `0x${string}`,
+  account: { address: MOCK_TREASURY },
+  chain: { id: 8453 },
+} as unknown as WalletClient;
+
+const mockSettlementConfig: SettlementConfig = {
+  treasuryAddress: MOCK_TREASURY,
+  publicClients: { 'eip155:8453': mockPublicClient, 'eip155:56': mockPublicClient },
+  walletClients: { 'eip155:8453': mockWalletClient, 'eip155:56': mockWalletClient },
+};
 
 // ============================================================================
 // InMemoryStore Tests
@@ -474,7 +496,7 @@ describe('SettlementService', () => {
   beforeEach(async () => {
     store = new InMemoryStore();
     handleService = new HandleService(store);
-    settlementService = new SettlementService(handleService, store);
+    settlementService = new SettlementService(handleService, store, mockSettlementConfig);
 
     // Register two agents for testing
     await handleService.register({

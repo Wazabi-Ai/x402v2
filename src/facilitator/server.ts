@@ -23,7 +23,7 @@ import type { Request, Response, NextFunction, Express } from 'express';
 import { InMemoryStore } from './db/schema.js';
 import { HandleService, HandleError } from './services/handle.js';
 import { SettlementService, SettlementError } from './services/settlement.js';
-import { WalletService, WAZABI_TREASURY } from './services/wallet.js';
+import { WalletService } from './services/wallet.js';
 import {
   RegisterRequestSchema,
   SettleRequestSchema,
@@ -45,17 +45,6 @@ import type { PublicClient, WalletClient } from 'viem';
 // Facilitator Application
 // ============================================================================
 
-/**
- * Server-level config for startFacilitator (environment / deployment settings)
- */
-export interface FacilitatorServerConfig {
-  port?: number;
-  portalDir?: string;
-  treasuryAddress?: `0x${string}`;
-  publicClients?: Record<string, PublicClient>;
-  walletClients?: Record<string, WalletClient>;
-}
-
 export interface FacilitatorConfig {
   /** Custom store (defaults to InMemoryStore) */
   store?: InMemoryStore;
@@ -65,12 +54,12 @@ export interface FacilitatorConfig {
   cors?: boolean;
   /** Absolute or relative path to the facilitator-portal directory to serve the dashboard UI at root */
   portalDir?: string;
-  /** Treasury wallet address for fee collection */
-  treasuryAddress?: `0x${string}`;
-  /** Public clients for on-chain reads, keyed by CAIP-2 network ID */
-  publicClients?: Record<string, PublicClient>;
-  /** Wallet clients for on-chain writes, keyed by CAIP-2 network ID */
-  walletClients?: Record<string, WalletClient>;
+  /** Treasury wallet address for fee collection (required) */
+  treasuryAddress: `0x${string}`;
+  /** Public clients for on-chain reads, keyed by CAIP-2 network ID (required) */
+  publicClients: Record<string, PublicClient>;
+  /** Wallet clients for on-chain writes, keyed by CAIP-2 network ID (required) */
+  walletClients: Record<string, WalletClient>;
 }
 
 /**
@@ -89,17 +78,17 @@ export interface FacilitatorConfig {
  */
 export function createFacilitator(
   app: Express,
-  config: FacilitatorConfig = {}
+  config: FacilitatorConfig
 ): void {
   const store = config.store ?? new InMemoryStore();
   const walletService = config.walletService ?? new WalletService();
   const handleService = new HandleService(store, walletService);
 
-  // Build settlement config from server config (treasury address + viem clients)
-  const settlementConfig = config.treasuryAddress && config.publicClients && config.walletClients
-    ? { treasuryAddress: config.treasuryAddress, publicClients: config.publicClients, walletClients: config.walletClients }
-    : undefined;
-  const settlementService = new SettlementService(handleService, store, settlementConfig);
+  const settlementService = new SettlementService(handleService, store, {
+    treasuryAddress: config.treasuryAddress,
+    publicClients: config.publicClients,
+    walletClients: config.walletClients,
+  });
 
   // CORS middleware
   if (config.cors !== false) {
@@ -437,22 +426,20 @@ export function createFacilitator(
 
   app.get('/supported', (_req: Request, res: Response) => {
     const networks = getSupportedNetworkIds().map(id => {
-      const config = SUPPORTED_NETWORKS[id];
+      const networkConfig = SUPPORTED_NETWORKS[id];
       return {
         id,
-        name: config?.name ?? id,
-        tokens: Object.keys(config?.tokens ?? {}),
+        name: networkConfig?.name ?? id,
+        tokens: Object.keys(networkConfig?.tokens ?? {}),
       };
     });
-
-    const treasuryAddress = config.treasuryAddress ?? WAZABI_TREASURY;
 
     const response: SupportedResponse & { treasury_address: string } = {
       networks,
       handle_suffix: HANDLE_SUFFIX,
       fee_rate: `${SETTLEMENT_FEE_BPS}bps (${SETTLEMENT_FEE_RATE * 100}%)`,
       wallet_type: 'ERC-4337',
-      treasury_address: treasuryAddress,
+      treasury_address: config.treasuryAddress,
     };
 
     res.json(response);
@@ -581,7 +568,7 @@ When encountering an HTTP 402 response:
  */
 export async function startFacilitator(
   port: number = 3000,
-  config?: FacilitatorConfig | FacilitatorServerConfig
+  config: FacilitatorConfig
 ): Promise<void> {
   // Dynamic import to keep express as optional peer dependency
   const { default: express } = await import('express');

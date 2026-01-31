@@ -10,7 +10,6 @@
 // Configuration (centralized env-driven config)
 export {
   loadConfig,
-  loadConfigSafe,
   createClients,
   CHAIN_MAP,
   type FacilitatorEnvConfig,
@@ -22,13 +21,8 @@ export { createFacilitator, startFacilitator, type FacilitatorConfig } from './s
 // Services
 export { HandleService, HandleError } from './services/handle.js';
 export { SettlementService, SettlementError } from './services/settlement.js';
-export {
-  WalletService,
-  ENTRYPOINT_ADDRESS,
-  WAZABI_ACCOUNT_FACTORY,
-  WAZABI_PAYMASTERS,
-  WAZABI_TREASURY,
-} from './services/wallet.js';
+export { WalletService } from './services/wallet.js';
+export type { SettlementConfig } from './services/settlement.js';
 
 // Database
 export { InMemoryStore, CREATE_ALL_TABLES } from './db/schema.js';
