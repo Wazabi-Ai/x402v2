@@ -475,7 +475,7 @@ const SKILL_MD_CONTENT = `# Wazabi x402 Payment Skill
 
 ## Description
 Enable your agent to send and receive payments using the Wazabi x402 protocol.
-Provides ERC-4337 smart wallet with gasless transactions on BNB Chain and Base.
+Provides ERC-4337 smart wallet with gasless transactions on Ethereum, BNB Chain, and Base.
 
 ## Setup
 To activate this skill, tell your agent:
@@ -495,7 +495,7 @@ https://facilitator.wazabi.ai
 POST /register
 {
   "handle": "<desired-handle>",
-  "networks": ["eip155:56", "eip155:8453"]
+  "networks": ["eip155:1", "eip155:56", "eip155:8453"]
 }
 \`\`\`
 Returns: wallet address, session key (store securely)
@@ -537,7 +537,8 @@ When encountering an HTTP 402 response:
 5. Retry original request
 
 ## Supported Networks
-- BNB Chain (eip155:56): USDT, USDC
+- Ethereum (eip155:1): USDC, USDT, WETH
+- BNB Chain (eip155:56): USDT, USDC, BUSD, WBNB
 - Base (eip155:8453): USDC
 
 ## Handle Format
