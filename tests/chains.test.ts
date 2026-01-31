@@ -343,8 +343,9 @@ describe('SUPPORTED_NETWORKS', () => {
     expect(SUPPORTED_NETWORKS['eip155:56']).toEqual(BSC_NETWORK_CONFIG);
   });
 
-  it('should contain BSC and Base', () => {
-    expect(Object.keys(SUPPORTED_NETWORKS)).toHaveLength(2);
+  it('should contain Ethereum, BSC, and Base', () => {
+    expect(Object.keys(SUPPORTED_NETWORKS)).toHaveLength(3);
+    expect(SUPPORTED_NETWORKS).toHaveProperty('eip155:1');
     expect(SUPPORTED_NETWORKS).toHaveProperty('eip155:56');
     expect(SUPPORTED_NETWORKS).toHaveProperty('eip155:8453');
   });
@@ -355,8 +356,12 @@ describe('getNetworkConfig', () => {
     expect(getNetworkConfig('eip155:56')).toEqual(BSC_NETWORK_CONFIG);
   });
 
+  it('should return ETH config for Ethereum CAIP ID', () => {
+    expect(getNetworkConfig('eip155:1')).toBeDefined();
+    expect(getNetworkConfig('eip155:1')?.name).toBe('Ethereum');
+  });
+
   it('should return undefined for unsupported networks', () => {
-    expect(getNetworkConfig('eip155:1')).toBeUndefined();
     expect(getNetworkConfig('eip155:137')).toBeUndefined();
     expect(getNetworkConfig('invalid')).toBeUndefined();
   });
@@ -367,8 +372,11 @@ describe('isNetworkSupported', () => {
     expect(isNetworkSupported('eip155:56')).toBe(true);
   });
 
+  it('should return true for Ethereum', () => {
+    expect(isNetworkSupported('eip155:1')).toBe(true);
+  });
+
   it('should return false for other networks', () => {
-    expect(isNetworkSupported('eip155:1')).toBe(false);
     expect(isNetworkSupported('eip155:137')).toBe(false);
     expect(isNetworkSupported('')).toBe(false);
   });
@@ -377,8 +385,9 @@ describe('isNetworkSupported', () => {
 describe('getSupportedNetworkIds', () => {
   it('should return array of supported network IDs', () => {
     const ids = getSupportedNetworkIds();
+    expect(ids).toContain('eip155:1');
     expect(ids).toContain('eip155:56');
     expect(ids).toContain('eip155:8453');
-    expect(ids).toHaveLength(2);
+    expect(ids).toHaveLength(3);
   });
 });

@@ -30,7 +30,7 @@ export const X402_HEADERS = {
 /**
  * Supported token symbol types
  */
-export type TokenSymbol = 'USDT' | 'USDC' | 'BNB' | 'BUSD';
+export type TokenSymbol = 'USDT' | 'USDC' | 'BNB' | 'BUSD' | 'WETH' | 'ETH';
 
 /**
  * Token configuration for a specific blockchain

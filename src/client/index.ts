@@ -9,7 +9,7 @@ import {
   type WalletClient,
 } from 'viem';
 import { privateKeyToAccount, type PrivateKeyAccount } from 'viem/accounts';
-import { bsc, base } from 'viem/chains';
+import { bsc, base, mainnet } from 'viem/chains';
 import type { Chain } from 'viem';
 
 import {
@@ -29,11 +29,13 @@ import {
   generateNonce,
   calculateDeadline,
 } from '../types/index.js';
+import { ETH_CAIP_ID, ETH_DEFAULT_RPC } from '../chains/ethereum.js';
 import { BSC_CAIP_ID, BSC_DEFAULT_RPC } from '../chains/bnb.js';
 import { BASE_CAIP_ID, BASE_DEFAULT_RPC } from '../chains/base.js';
 
 /** Map CAIP-2 network IDs to viem chain objects */
 const CHAIN_LOOKUP: Record<string, { chain: Chain; rpc: string }> = {
+  [ETH_CAIP_ID]: { chain: mainnet, rpc: ETH_DEFAULT_RPC },
   [BSC_CAIP_ID]: { chain: bsc, rpc: BSC_DEFAULT_RPC },
   [BASE_CAIP_ID]: { chain: base, rpc: BASE_DEFAULT_RPC },
 };
@@ -382,6 +384,14 @@ export {
   UnsupportedNetworkError,
   PaymentExpiredError,
 } from '../types/index.js';
+
+export {
+  ETH_CAIP_ID,
+  ETH_CHAIN_ID,
+  ETH_USDC,
+  ETH_USDT,
+  ETH_TOKENS,
+} from '../chains/ethereum.js';
 
 export {
   BSC_CAIP_ID,
