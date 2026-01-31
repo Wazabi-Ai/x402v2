@@ -1,16 +1,19 @@
-// Re-export all BNB chain configurations
+// Re-export all chain configurations
 export * from './bnb.js';
+export * from './base.js';
 
-// Export a registry of all supported networks for future expansion
+// Export a registry of all supported networks
 import { BSC_NETWORK_CONFIG, BSC_CAIP_ID } from './bnb.js';
-import type { NetworkConfig } from '../types/index.js';
+import { BASE_NETWORK_CONFIG, BASE_CAIP_ID } from './base.js';
+import type { NetworkConfig, TokenConfig } from '../types/index.js';
 
 /**
  * Registry of all supported networks
- * Currently only BSC, but structured for future expansion
+ * BNB Smart Chain + Base (Coinbase L2)
  */
 export const SUPPORTED_NETWORKS: Record<string, NetworkConfig> = {
   [BSC_CAIP_ID]: BSC_NETWORK_CONFIG,
+  [BASE_CAIP_ID]: BASE_NETWORK_CONFIG,
 } as const;
 
 /**
@@ -32,4 +35,13 @@ export function isNetworkSupported(caipId: string): boolean {
  */
 export function getSupportedNetworkIds(): string[] {
   return Object.keys(SUPPORTED_NETWORKS);
+}
+
+/**
+ * Get token config by symbol across all networks for a given network
+ */
+export function getTokenForNetwork(caipId: string, symbol: string): TokenConfig | undefined {
+  const network = SUPPORTED_NETWORKS[caipId];
+  if (!network) return undefined;
+  return network.tokens[symbol.toUpperCase()];
 }

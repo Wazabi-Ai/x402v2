@@ -343,8 +343,10 @@ describe('SUPPORTED_NETWORKS', () => {
     expect(SUPPORTED_NETWORKS['eip155:56']).toEqual(BSC_NETWORK_CONFIG);
   });
 
-  it('should only contain BSC for now', () => {
-    expect(Object.keys(SUPPORTED_NETWORKS)).toHaveLength(1);
+  it('should contain BSC and Base', () => {
+    expect(Object.keys(SUPPORTED_NETWORKS)).toHaveLength(2);
+    expect(SUPPORTED_NETWORKS).toHaveProperty('eip155:56');
+    expect(SUPPORTED_NETWORKS).toHaveProperty('eip155:8453');
   });
 });
 
@@ -376,6 +378,7 @@ describe('getSupportedNetworkIds', () => {
   it('should return array of supported network IDs', () => {
     const ids = getSupportedNetworkIds();
     expect(ids).toContain('eip155:56');
-    expect(ids).toHaveLength(1);
+    expect(ids).toContain('eip155:8453');
+    expect(ids).toHaveLength(2);
   });
 });
