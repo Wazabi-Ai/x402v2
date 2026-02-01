@@ -172,9 +172,8 @@ export class SettlementService {
 
     // Calculate fees
     const fee = calculateFee(amount);
-    // TODO: Estimate gas dynamically via publicClient.estimateGas() and a price oracle.
-    // For now use a conservative fixed estimate in token (USD) units.
-    const estimatedGas = '0.02';
+    // Estimate gas cost dynamically using on-chain data
+    const estimatedGas = await this.estimateGasCost(network, token);
     const net = calculateNet(amount, fee, estimatedGas);
 
     if (parseFloat(net) <= 0) {
@@ -229,6 +228,60 @@ export class SettlementService {
       estimatedGas,
       net,
     });
+  }
+
+  // ------------------------------------------------------------------
+  // Dynamic Gas Cost Estimation
+  // ------------------------------------------------------------------
+
+  /**
+   * Estimate gas cost for an ERC-20 transfer in USD-equivalent token units.
+   *
+   * Uses on-chain gas price data and a conservative gas limit for ERC-20
+   * transfers (~65,000 gas). The result is converted to a USD-equivalent
+   * amount using fixed native-token price assumptions per chain.
+   *
+   * Falls back to a conservative $0.02 estimate if the RPC call fails.
+   */
+  private async estimateGasCost(network: string, _token: string): Promise<string> {
+    const FALLBACK_GAS_COST = '0.02';
+    const ERC20_TRANSFER_GAS = 65_000n;
+
+    const publicClient = this.config.publicClients[network];
+    if (!publicClient) {
+      return FALLBACK_GAS_COST;
+    }
+
+    try {
+      const gasPrice = await publicClient.getGasPrice();
+      // gasCostWei = gasPrice * gasLimit
+      const gasCostWei = gasPrice * ERC20_TRANSFER_GAS;
+
+      // Convert native token cost to approximate USD using conservative price estimates.
+      // These are floor estimates -- overestimating slightly is safer than underestimating.
+      const nativeUsdPrice = this.getNativeTokenUsdPrice(network);
+      const gasCostUsd = Number(gasCostWei) / 1e18 * nativeUsdPrice;
+
+      // Floor at $0.001 to avoid rounding to zero on cheap chains
+      const rounded = Math.max(gasCostUsd, 0.001);
+      return rounded < 0.01 ? rounded.toFixed(6) : rounded.toFixed(2);
+    } catch {
+      return FALLBACK_GAS_COST;
+    }
+  }
+
+  /**
+   * Conservative native token USD prices per chain.
+   * These are intentionally pessimistic (high) to prevent undercharging for gas.
+   * In production, integrate a price oracle (Chainlink, Coingecko, etc.).
+   */
+  private getNativeTokenUsdPrice(network: string): number {
+    switch (network) {
+      case 'eip155:1':    return 4000;  // ETH ~$4000 (high estimate)
+      case 'eip155:56':   return 700;   // BNB ~$700 (high estimate)
+      case 'eip155:8453': return 4000;  // Base uses ETH
+      default:            return 4000;
+    }
   }
 
   // ------------------------------------------------------------------

@@ -50,6 +50,18 @@ export const BASE_USDC: TokenConfig = {
 } as const;
 
 /**
+ * Base WETH (Wrapped Ether) Token Configuration
+ * Bridged WETH on Base (18 decimals)
+ * @see https://basescan.org/token/0x4200000000000000000000000000000000000006
+ */
+export const BASE_WETH: TokenConfig = {
+  address: '0x4200000000000000000000000000000000000006',
+  symbol: 'WETH',
+  decimals: 18,
+  name: 'Wrapped Ether',
+} as const;
+
+/**
  * Default token for payments on Base (USDC)
  */
 export const BASE_DEFAULT_TOKEN = BASE_USDC;
@@ -59,6 +71,7 @@ export const BASE_DEFAULT_TOKEN = BASE_USDC;
  */
 export const BASE_TOKENS = {
   USDC: BASE_USDC,
+  WETH: BASE_WETH,
 } as const;
 
 /**
@@ -66,6 +79,7 @@ export const BASE_TOKENS = {
  */
 export const BASE_TOKEN_BY_ADDRESS: Record<string, TokenConfig> = {
   [BASE_USDC.address.toLowerCase()]: BASE_USDC,
+  [BASE_WETH.address.toLowerCase()]: BASE_WETH,
 };
 
 // ============================================================================

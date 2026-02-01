@@ -3,6 +3,7 @@ import type { Express, Request, Response } from 'express';
 import type { PublicClient, WalletClient } from 'viem';
 import { InMemoryStore } from '../src/facilitator/db/schema.js';
 import { createFacilitator } from '../src/facilitator/server.js';
+import { WalletService } from '../src/facilitator/services/wallet.js';
 import {
   HANDLE_SUFFIX,
   SETTLEMENT_FEE_BPS,
@@ -22,10 +23,19 @@ const mockWalletClient = {
   chain: { id: 8453 },
 } as unknown as WalletClient;
 
+const TEST_FACTORY_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as `0x${string}`;
+
 const mockClients = {
   treasuryAddress: MOCK_TREASURY,
   publicClients: { 'eip155:8453': mockPublicClient, 'eip155:56': mockPublicClient } as Record<string, PublicClient>,
   walletClients: { 'eip155:8453': mockWalletClient, 'eip155:56': mockWalletClient } as Record<string, WalletClient>,
+  walletService: new WalletService({
+    accountFactoryAddresses: {
+      'eip155:1': TEST_FACTORY_ADDRESS,
+      'eip155:56': TEST_FACTORY_ADDRESS,
+      'eip155:8453': TEST_FACTORY_ADDRESS,
+    },
+  }),
 };
 
 // ============================================================================

@@ -266,10 +266,12 @@ export class HandleService {
    */
   private getTokensForNetwork(network: string): string[] {
     switch (network) {
+      case 'eip155:1':
+        return ['USDC', 'USDT', 'WETH'];
       case 'eip155:56':
         return ['USDT', 'USDC'];
       case 'eip155:8453':
-        return ['USDC'];
+        return ['USDC', 'WETH'];
       default:
         return ['USDC'];
     }

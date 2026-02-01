@@ -18,6 +18,11 @@ const config: HardhatUserConfig = {
     },
   },
   networks: {
+    mainnet: {
+      url: process.env.RPC_ETH || 'https://eth.llamarpc.com',
+      chainId: 1,
+      accounts: [DEPLOYER_KEY],
+    },
     bsc: {
       url: process.env.RPC_BSC || 'https://bsc-dataseed.binance.org',
       chainId: 56,

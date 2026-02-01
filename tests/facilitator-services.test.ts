@@ -263,11 +263,20 @@ describe('InMemoryStore', () => {
 // WalletService Tests
 // ============================================================================
 
+const TEST_FACTORY_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as `0x${string}`;
+const testWalletConfig = {
+  accountFactoryAddresses: {
+    'eip155:1': TEST_FACTORY_ADDRESS,
+    'eip155:56': TEST_FACTORY_ADDRESS,
+    'eip155:8453': TEST_FACTORY_ADDRESS,
+  },
+};
+
 describe('WalletService', () => {
   let walletService: WalletService;
 
   beforeEach(() => {
-    walletService = new WalletService();
+    walletService = new WalletService(testWalletConfig);
   });
 
   describe('computeWalletAddress', () => {
@@ -347,7 +356,7 @@ describe('HandleService', () => {
 
   beforeEach(() => {
     store = new InMemoryStore();
-    handleService = new HandleService(store);
+    handleService = new HandleService(store, new WalletService(testWalletConfig));
   });
 
   describe('register', () => {
@@ -495,7 +504,7 @@ describe('SettlementService', () => {
 
   beforeEach(async () => {
     store = new InMemoryStore();
-    handleService = new HandleService(store);
+    handleService = new HandleService(store, new WalletService(testWalletConfig));
     settlementService = new SettlementService(handleService, store, mockSettlementConfig);
 
     // Register two agents for testing
