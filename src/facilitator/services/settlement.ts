@@ -2,6 +2,7 @@
  * Settlement Service
  *
  * Handles payment settlement with 0.5% fee collection.
+ * ALL gas costs are passed through to the user -- the treasury never absorbs gas.
  *
  * Requires a SettlementConfig with treasury wallet and viem clients to
  * execute real on-chain ERC-20 transfers.
@@ -11,20 +12,25 @@
  *   2. Unregistered users -- identified by raw Ethereum address (e.g., "0x...")
  *
  * Registration is NOT required. Any valid Ethereum address can use /settle and /verify.
- * Registered agents get additional benefits (handles, gasless UX, history tracking).
+ *
+ * Gas cost model:
+ *   - Before settlement, gas cost is estimated using on-chain gas price data.
+ *   - The estimated gas is deducted from the user's gross amount up front.
+ *   - After the on-chain transfer, the actual gas cost is calculated from the
+ *     transaction receipt (gasUsed * effectiveGasPrice) and the transaction
+ *     record is updated with the real cost.
+ *   - The treasury retains: protocol fee (0.5%) + actual gas cost in native tokens.
  *
  * Settlement flow:
- *   - The payer has already transferred the full gross amount to the treasury
- *     via the verified x402 payment authorization.
- *   - The treasury wallet forwards the net amount (gross minus 0.5% fee) to
- *     the recipient via an ERC-20 transfer.
- *   - The fee remains in the treasury automatically.
+ *   - The payer transfers the full gross amount to the treasury via x402 payment.
+ *   - The treasury forwards the net amount (gross - fee - gas) to the recipient.
+ *   - The protocol fee and gas cost remain in the treasury automatically.
  */
 
 import { randomUUID } from 'crypto';
 import type { PublicClient, WalletClient } from 'viem';
 import type { InMemoryStore } from '../db/schema.js';
-import type { Transaction, SettleRequest, SettleResponse } from '../types.js';
+import type { Agent, Transaction, SettleRequest, SettleResponse } from '../types.js';
 import {
   SETTLEMENT_FEE_RATE,
   SETTLEMENT_FEE_BPS,
@@ -134,21 +140,22 @@ export class SettlementService {
 
     // Resolve sender: try registered agent first, fall back to raw address
     let fromIdentifier: string;
+    let senderAgent: Agent | null = null;
 
     if (isAddress(from)) {
       // Raw address -- check if registered, but don't require it
-      const sender = await this.store.getAgentByWallet(from);
-      fromIdentifier = sender?.full_handle ?? from;
+      senderAgent = await this.store.getAgentByWallet(from);
+      fromIdentifier = senderAgent?.full_handle ?? from;
     } else {
       // Handle -- must be registered
-      const sender = await this.store.getAgentByHandle(from);
-      if (!sender) {
+      senderAgent = await this.store.getAgentByHandle(from);
+      if (!senderAgent) {
         throw new SettlementError(
           `Handle "${from}" not found. Use a raw wallet address or register first at POST /register.`,
           'HANDLE_NOT_FOUND'
         );
       }
-      fromIdentifier = sender.full_handle;
+      fromIdentifier = senderAgent.full_handle;
     }
 
     // Resolve recipient: try registered agent first, fall back to raw address
@@ -174,11 +181,20 @@ export class SettlementService {
     const fee = calculateFee(amount);
     // Estimate gas cost dynamically using on-chain data
     const estimatedGas = await this.estimateGasCost(network, token);
-    const net = calculateNet(amount, fee, estimatedGas);
+
+    // Check for one-time wallet deployment fee (charged on first settlement)
+    const deploymentFee = (senderAgent?.pending_deployment_fee &&
+      parseFloat(senderAgent.pending_deployment_fee) > 0)
+      ? senderAgent.pending_deployment_fee
+      : '0';
+
+    // Total gas includes transfer gas + any pending deployment fee
+    const totalEstimatedGas = (parseFloat(estimatedGas) + parseFloat(deploymentFee)).toFixed(2);
+    const net = calculateNet(amount, fee, totalEstimatedGas);
 
     if (parseFloat(net) <= 0) {
       throw new SettlementError(
-        `Amount too small. After fee ($${fee}) and gas ($${estimatedGas}), net would be $${net}.`,
+        `Amount too small. After fee ($${fee}) and gas ($${totalEstimatedGas}), net would be $${net}.`,
         'AMOUNT_TOO_SMALL'
       );
     }
@@ -192,7 +208,7 @@ export class SettlementService {
       token,
       network,
       fee,
-      gas_cost: estimatedGas,
+      gas_cost: totalEstimatedGas,
       tx_hash: null,
       status: 'pending',
       created_at: new Date(),
@@ -213,7 +229,7 @@ export class SettlementService {
       );
     }
 
-    return this.executeLiveSettlement({
+    const result = await this.executeLiveSettlement({
       transaction,
       publicClient,
       walletClient,
@@ -225,9 +241,16 @@ export class SettlementService {
       token,
       network,
       fee,
-      estimatedGas,
+      deploymentFee,
       net,
     });
+
+    // Clear pending deployment fee after successful settlement
+    if (senderAgent && parseFloat(deploymentFee) > 0) {
+      await this.store.updateAgent(senderAgent.id, { pending_deployment_fee: '0' });
+    }
+
+    return result;
   }
 
   // ------------------------------------------------------------------
@@ -284,6 +307,23 @@ export class SettlementService {
     }
   }
 
+  /**
+   * Calculate actual gas cost in USD from a confirmed transaction receipt.
+   * Uses gasUsed * effectiveGasPrice from the receipt for exact cost.
+   */
+  private calculateActualGasCost(
+    gasUsed: bigint,
+    effectiveGasPrice: bigint,
+    network: string
+  ): string {
+    const gasCostWei = gasUsed * effectiveGasPrice;
+    const nativeUsdPrice = this.getNativeTokenUsdPrice(network);
+    const gasCostUsd = Number(gasCostWei) / 1e18 * nativeUsdPrice;
+
+    const rounded = Math.max(gasCostUsd, 0.001);
+    return rounded < 0.01 ? rounded.toFixed(6) : rounded.toFixed(2);
+  }
+
   // ------------------------------------------------------------------
   // Live on-chain settlement
   // ------------------------------------------------------------------
@@ -300,7 +340,7 @@ export class SettlementService {
     token: string;
     network: string;
     fee: string;
-    estimatedGas: string;
+    deploymentFee: string;
     net: string;
   }): Promise<SettleResponse> {
     const {
@@ -315,7 +355,7 @@ export class SettlementService {
       token,
       network,
       fee,
-      estimatedGas,
+      deploymentFee,
       net,
     } = params;
 
@@ -392,7 +432,20 @@ export class SettlementService {
       });
 
       if (receipt.status === 'success') {
-        // 8a. Confirmed -- update record and return success
+        // 8a. Confirmed -- calculate actual gas cost from receipt and update record.
+        //     Include any one-time wallet deployment fee in the total gas charge.
+        const transferGas = this.calculateActualGasCost(
+          receipt.gasUsed,
+          receipt.effectiveGasPrice,
+          network
+        );
+        const deployFeeNum = parseFloat(deploymentFee) || 0;
+        const totalGas = parseFloat(transferGas) + deployFeeNum;
+        const totalGasStr = totalGas < 0.01 ? totalGas.toFixed(6) : totalGas.toFixed(2);
+        const actualNet = calculateNet(amount, fee, totalGasStr);
+
+        // Update transaction record with actual total gas cost
+        await this.store.updateTransactionGas(transaction.id, totalGasStr);
         await this.store.updateTransactionStatus(
           transaction.id,
           'confirmed',
@@ -405,8 +458,8 @@ export class SettlementService {
           settlement: {
             gross: amount,
             fee,
-            gas: estimatedGas,
-            net,
+            gas: totalGasStr,
+            net: actualNet,
           },
           from: fromIdentifier,
           to: toIdentifier,

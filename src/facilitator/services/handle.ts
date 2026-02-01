@@ -180,6 +180,10 @@ export class HandleService {
    *
    * Attempts deployment on each network independently. Failures on
    * individual networks are logged but do not affect other networks.
+   *
+   * After deployment, estimates the total gas cost across all networks
+   * and stores it as a pending deployment fee on the agent record.
+   * This fee is recovered from the user's first settlement.
    */
   async deployAgentWallet(handle: string): Promise<Record<string, { deployed: boolean; txHash?: string }>> {
     const agent = await this.store.getAgentByHandle(handle);
@@ -205,7 +209,41 @@ export class HandleService {
       }
     }
 
+    // Estimate total deployment gas cost and store as pending fee
+    let totalDeploymentFee = 0;
+    for (const [network, result] of Object.entries(results)) {
+      if (result.deployed) {
+        totalDeploymentFee += this.estimateDeploymentCostUsd(network);
+      }
+    }
+    if (totalDeploymentFee > 0) {
+      await this.store.updateAgent(agent.id, {
+        pending_deployment_fee: totalDeploymentFee.toFixed(2),
+      });
+    }
+
     return results;
+  }
+
+  /**
+   * Estimate wallet deployment gas cost in USD for a given network.
+   *
+   * Uses conservative gas price assumptions and a 500,000 gas budget
+   * for the CREATE2 proxy deployment + initialization.
+   */
+  private estimateDeploymentCostUsd(network: string): number {
+    const DEPLOYMENT_GAS = 500_000;
+    const estimates: Record<string, { gasPriceGwei: number; nativeUsdPrice: number }> = {
+      'eip155:1':    { gasPriceGwei: 30,   nativeUsdPrice: 4000 },
+      'eip155:56':   { gasPriceGwei: 3,    nativeUsdPrice: 700 },
+      'eip155:8453': { gasPriceGwei: 0.01, nativeUsdPrice: 4000 },
+    };
+
+    const est = estimates[network];
+    if (!est) return 0;
+
+    const gasCostNative = DEPLOYMENT_GAS * est.gasPriceGwei * 1e-9;
+    return gasCostNative * est.nativeUsdPrice;
   }
 
   /**

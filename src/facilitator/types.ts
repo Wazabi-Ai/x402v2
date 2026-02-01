@@ -88,6 +88,8 @@ export interface Agent {
   session_key_public: string;
   created_at: Date;
   metadata: Record<string, unknown>;
+  /** Estimated wallet deployment gas cost (USD) awaiting recovery from first settlement */
+  pending_deployment_fee?: string;
 }
 
 /**

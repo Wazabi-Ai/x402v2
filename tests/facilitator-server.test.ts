@@ -14,7 +14,12 @@ const MOCK_TREASURY = '0x1111111111111111111111111111111111111111' as `0x${strin
 
 const mockPublicClient = {
   readContract: async () => BigInt('1000000000000000000000'),
-  waitForTransactionReceipt: async () => ({ status: 'success' as const }),
+  getGasPrice: async () => BigInt(76_923_077), // ~0.077 gwei → ~$0.02 gas on Base ($4000 ETH)
+  waitForTransactionReceipt: async () => ({
+    status: 'success' as const,
+    gasUsed: BigInt(65_000),
+    effectiveGasPrice: BigInt(76_923_077),
+  }),
 } as unknown as PublicClient;
 
 const mockWalletClient = {
