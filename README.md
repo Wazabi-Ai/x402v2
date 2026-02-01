@@ -302,7 +302,7 @@ Compile with `npx hardhat compile`. Deploy with `npx hardhat run scripts/deploy.
 ```bash
 npm install
 npm run build          # ESM + CJS + declarations
-npm test               # 271 tests via Vitest
+npm test               # 278 tests via Vitest
 npm run dev            # build with watch
 ```
 

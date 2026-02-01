@@ -241,12 +241,16 @@ export interface X402ClientConfig {
   autoRetry?: boolean;
   /** Maximum retries (default: 1) */
   maxRetries?: number;
+  /** Auto-approve Permit2 when allowance is insufficient (default: true) */
+  autoApprovePermit2?: boolean;
   /** Custom axios instance configuration */
   axiosConfig?: Record<string, unknown>;
   /** Callback when payment is required */
   onPaymentRequired?: (requirement: PaymentRequirement) => void | Promise<void>;
   /** Callback when payment is signed */
   onPaymentSigned?: (payment: PaymentPayload) => void | Promise<void>;
+  /** Callback when Permit2 approval is needed (before sending tx) */
+  onPermit2ApprovalNeeded?: (token: string, permit2Address: string) => void | Promise<void>;
 }
 
 // ============================================================================
