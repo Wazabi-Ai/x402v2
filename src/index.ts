@@ -1,8 +1,8 @@
 /**
  * @wazabiai/x402 - x402 v2 Payment Protocol SDK for Ethereum, BNB Smart Chain & Base
  *
- * Complete Agent Financial Platform with identity (handles),
- * smart wallets (ERC-4337), and settlement (0.5% fee).
+ * Open protocol for internet-native payments using HTTP 402.
+ * Non-custodial settlement via Permit2 and ERC-3009.
  *
  * @packageDocumentation
  *
@@ -34,11 +34,11 @@
  *
  * @example
  * ```typescript
- * // Facilitator usage (Agent Financial Platform)
+ * // Facilitator usage (settlement relay)
  * import { startFacilitator } from '@wazabiai/x402/facilitator';
  *
  * startFacilitator(3000);
- * // Now serving: /register, /resolve, /balance, /history, /settle, etc.
+ * // Now serving: /x402/settle, /verify, /history, /supported, /skill.md
  * ```
  */
 
@@ -63,12 +63,7 @@ export {
 export {
   createFacilitator,
   startFacilitator,
-  HandleService,
   SettlementService,
-  WalletService,
   InMemoryStore,
-  HANDLE_SUFFIX,
   SETTLEMENT_FEE_RATE,
-  toFullHandle,
-  toShortHandle,
 } from './facilitator/index.js';

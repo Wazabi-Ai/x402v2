@@ -5,8 +5,11 @@ import axios, {
 } from 'axios';
 import {
   createWalletClient,
+  createPublicClient,
   http,
   type WalletClient,
+  type PublicClient,
+  maxUint256,
 } from 'viem';
 import { privateKeyToAccount, type PrivateKeyAccount } from 'viem/accounts';
 import { bsc, base, mainnet } from 'viem/chains';
@@ -22,6 +25,8 @@ import {
   PaymentRequiredError,
   PaymentVerificationError,
   UnsupportedNetworkError,
+  Permit2ApprovalRequiredError,
+  PERMIT2_ADDRESS,
   X402_HEADERS,
   PERMIT2_BATCH_WITNESS_TYPES,
   ERC3009_TYPES,
@@ -45,6 +50,33 @@ const CHAIN_LOOKUP: Record<string, { chain: Chain; rpc: string }> = {
 };
 
 // ============================================================================
+// Minimal ERC-20 ABI for allowance check and approval
+// ============================================================================
+
+const ERC20_ABI = [
+  {
+    name: 'allowance',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [
+      { name: 'owner', type: 'address' },
+      { name: 'spender', type: 'address' },
+    ],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'approve',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'spender', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+    ],
+    outputs: [{ name: '', type: 'bool' }],
+  },
+] as const;
+
+// ============================================================================
 // X402 Client Class
 // ============================================================================
 
@@ -57,6 +89,8 @@ const CHAIN_LOOKUP: Record<string, { chain: Chain; rpc: string }> = {
  * 3. Signs the appropriate authorization (Permit2 or ERC-3009)
  * 4. Retries with the signed payment in the x-payment header
  *
+ * Automatically checks and handles Permit2 ERC-20 approvals when needed.
+ *
  * @example
  * ```typescript
  * const client = new X402Client({ privateKey: '0x...' });
@@ -66,9 +100,10 @@ const CHAIN_LOOKUP: Record<string, { chain: Chain; rpc: string }> = {
 export class X402Client {
   private readonly axiosInstance: AxiosInstance;
   private readonly walletClient: WalletClient | null = null;
+  private readonly publicClient: PublicClient | null = null;
   private readonly account: PrivateKeyAccount | null = null;
   private readonly config: Required<Pick<X402ClientConfig,
-    'supportedNetworks' | 'defaultDeadline' | 'autoRetry' | 'maxRetries'
+    'supportedNetworks' | 'defaultDeadline' | 'autoRetry' | 'maxRetries' | 'autoApprovePermit2'
   >> & X402ClientConfig;
 
   constructor(config: X402ClientConfig = {}) {
@@ -77,6 +112,7 @@ export class X402Client {
       defaultDeadline: 300,
       autoRetry: true,
       maxRetries: 1,
+      autoApprovePermit2: true,
       ...config,
     };
 
@@ -96,10 +132,17 @@ export class X402Client {
       const primaryNetwork = this.config.supportedNetworks[0] ?? BASE_CAIP_ID;
       const lookup = CHAIN_LOOKUP[primaryNetwork] ?? CHAIN_LOOKUP[BASE_CAIP_ID]!;
 
+      const transport = http(config.rpcUrl ?? lookup.rpc);
+
       this.walletClient = createWalletClient({
         account: this.account,
         chain: lookup.chain,
-        transport: http(config.rpcUrl ?? lookup.rpc),
+        transport,
+      });
+
+      this.publicClient = createPublicClient({
+        chain: lookup.chain,
+        transport,
       });
     }
   }
@@ -250,7 +293,57 @@ export class X402Client {
   }
 
   /**
+   * Check Permit2 allowance for a token and approve if needed.
+   *
+   * Permit2 requires a one-time ERC-20 approval per token. This method:
+   * 1. Reads the current allowance from the token contract
+   * 2. If insufficient and autoApprovePermit2 is true, sends an approve tx
+   * 3. If insufficient and autoApprovePermit2 is false, throws Permit2ApprovalRequiredError
+   *
+   * @param token - ERC-20 token address
+   * @param amount - Required transfer amount (approval is for MAX_UINT256)
+   */
+  async ensurePermit2Approval(
+    token: `0x${string}`,
+    amount: bigint
+  ): Promise<void> {
+    if (!this.publicClient || !this.walletClient || !this.account) {
+      throw new PaymentVerificationError('Cannot check approval: no wallet configured');
+    }
+
+    const allowance = await this.publicClient.readContract({
+      address: token,
+      abi: ERC20_ABI,
+      functionName: 'allowance',
+      args: [this.account.address, PERMIT2_ADDRESS],
+    });
+
+    if (allowance >= amount) return;
+
+    if (!this.config.autoApprovePermit2) {
+      throw new Permit2ApprovalRequiredError(token, PERMIT2_ADDRESS);
+    }
+
+    if (this.config.onPermit2ApprovalNeeded) {
+      await this.config.onPermit2ApprovalNeeded(token, PERMIT2_ADDRESS);
+    }
+
+    const hash = await this.walletClient.writeContract({
+      address: token,
+      abi: ERC20_ABI,
+      functionName: 'approve',
+      args: [PERMIT2_ADDRESS, maxUint256],
+      account: this.account,
+      chain: this.walletClient.chain!,
+    });
+
+    await this.publicClient.waitForTransactionReceipt({ hash });
+  }
+
+  /**
    * Sign a Permit2 batch witness authorization.
+   *
+   * Checks Permit2 allowance first and approves if needed.
    *
    * The payer signs a PermitBatchWitnessTransferFrom with:
    *   permitted[0] = { token, netAmount }   → goes to recipient
@@ -262,6 +355,12 @@ export class X402Client {
   ): Promise<Permit2Payload> {
     const chainId = extractChainId(accept.network);
     const grossAmount = BigInt(accept.amount);
+
+    // Ensure Permit2 has sufficient allowance for this token
+    await this.ensurePermit2Approval(
+      accept.token as `0x${string}`,
+      grossAmount
+    );
     const { net, fee } = calculateFeeSplit(grossAmount, accept.feeBps);
 
     const nonce = generatePermit2Nonce();
@@ -448,6 +547,7 @@ export {
   PaymentVerificationError,
   UnsupportedNetworkError,
   PaymentExpiredError,
+  Permit2ApprovalRequiredError,
 } from '../types/index.js';
 
 export {

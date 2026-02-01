@@ -12,10 +12,6 @@
  *
  * The facilitator pays gas but cannot redirect funds. The payer's EIP-712 signature
  * cryptographically commits to the recipient and fee rate.
- *
- * Identity layer integration:
- *   - verifyPayment() and getHistory() still support handle-based lookups.
- *   - The old custodial settle() is replaced by settleX402().
  */
 
 import { randomUUID } from 'crypto';
@@ -27,7 +23,6 @@ import {
   SETTLEMENT_FEE_BPS,
   isAddress,
 } from '../types.js';
-import type { HandleService } from './handle.js';
 import type {
   PaymentPayload,
   Permit2Payload,
@@ -99,13 +94,9 @@ const wazabiSettlementAbi = [
 // ============================================================================
 
 export interface SettlementConfig {
-  /** Treasury wallet address that receives protocol fees */
   treasuryAddress: `0x${string}`;
-  /** WazabiSettlement contract addresses keyed by CAIP-2 network ID */
   settlementAddresses: Record<string, `0x${string}`>;
-  /** Public clients keyed by CAIP-2 network ID */
   publicClients: Record<string, PublicClient>;
-  /** Wallet clients keyed by CAIP-2 network ID (facilitator account, pays gas) */
   walletClients: Record<string, WalletClient>;
 }
 
@@ -126,35 +117,18 @@ function splitSignature(sig: string): { v: number; r: `0x${string}`; s: `0x${str
 // ============================================================================
 
 export class SettlementService {
-  private readonly handleService: HandleService;
   private readonly store: InMemoryStore;
   private readonly config: SettlementConfig;
 
-  constructor(
-    handleService: HandleService,
-    store: InMemoryStore,
-    config: SettlementConfig
-  ) {
-    this.handleService = handleService;
+  constructor(store: InMemoryStore, config: SettlementConfig) {
     this.store = store;
     this.config = config;
-  }
-
-  get handles(): HandleService {
-    return this.handleService;
   }
 
   // ==========================================================================
   // x402 Settlement (non-custodial, via WazabiSettlement contract)
   // ==========================================================================
 
-  /**
-   * Settle an x402 payment on-chain via the WazabiSettlement contract.
-   *
-   * Routes to the appropriate settlement path based on the payment scheme:
-   *   - permit2 → WazabiSettlement.settle()
-   *   - erc3009 → WazabiSettlement.settleWithAuthorization()
-   */
   async settleX402(payload: PaymentPayload): Promise<PaymentResponse> {
     const { network } = payload;
 
@@ -183,7 +157,6 @@ export class SettlementService {
       );
     }
 
-    // Create transaction record
     const settlementId = randomUUID();
     const payer = payload.payer;
     const recipient = payload.scheme === 'permit2'
@@ -200,7 +173,7 @@ export class SettlementService {
 
     const transaction: Transaction = {
       id: settlementId,
-      from_handle: payer,
+      from_address: payer,
       to_address: recipient,
       amount: grossAmount,
       token,
@@ -218,23 +191,13 @@ export class SettlementService {
       let txHash: `0x${string}`;
 
       if (payload.scheme === 'permit2') {
-        txHash = await this.executePermit2Settlement(
-          payload,
-          settlementAddress,
-          walletClient
-        );
+        txHash = await this.executePermit2Settlement(payload, settlementAddress, walletClient);
       } else {
-        txHash = await this.executeERC3009Settlement(
-          payload,
-          settlementAddress,
-          walletClient
-        );
+        txHash = await this.executeERC3009Settlement(payload, settlementAddress, walletClient);
       }
 
-      // Mark as submitted
       await this.store.updateTransactionStatus(settlementId, 'submitted', txHash);
 
-      // Wait for confirmation
       const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
 
       if (receipt.status === 'success') {
@@ -246,34 +209,19 @@ export class SettlementService {
         await this.store.updateTransactionGas(settlementId, gasStr);
         await this.store.updateTransactionStatus(settlementId, 'confirmed', txHash);
 
-        return {
-          success: true,
-          txHash,
-          network,
-          settlementId,
-        };
+        return { success: true, txHash, network, settlementId };
       } else {
         await this.store.updateTransactionStatus(settlementId, 'failed', txHash);
-        throw new SettlementError(
-          `Transaction reverted on-chain. Tx hash: ${txHash}`,
-          'TX_REVERTED'
-        );
+        throw new SettlementError(`Transaction reverted on-chain. Tx hash: ${txHash}`, 'TX_REVERTED');
       }
     } catch (err) {
       if (err instanceof SettlementError) throw err;
-
       const errorMessage = err instanceof Error ? err.message : String(err);
       await this.store.updateTransactionStatus(settlementId, 'failed');
-      throw new SettlementError(
-        `On-chain settlement failed: ${errorMessage}`,
-        'SETTLEMENT_FAILED'
-      );
+      throw new SettlementError(`On-chain settlement failed: ${errorMessage}`, 'SETTLEMENT_FAILED');
     }
   }
 
-  /**
-   * Execute Permit2 settlement via WazabiSettlement.settle()
-   */
   private async executePermit2Settlement(
     payload: Permit2Payload,
     settlementAddress: `0x${string}`,
@@ -303,9 +251,6 @@ export class SettlementService {
     });
   }
 
-  /**
-   * Execute ERC-3009 settlement via WazabiSettlement.settleWithAuthorization()
-   */
   private async executeERC3009Settlement(
     payload: ERC3009Payload,
     settlementAddress: `0x${string}`,
@@ -326,24 +271,18 @@ export class SettlementService {
         BigInt(payload.authorization.validAfter),
         BigInt(payload.authorization.validBefore),
         payload.authorization.nonce as `0x${string}`,
-        v,
-        r,
-        s,
+        v, r, s,
       ],
       account: walletClient.account!,
       chain: walletClient.chain!,
     });
   }
 
-  /**
-   * Resolve ERC-3009 token address for a network (USDC only)
-   */
   private resolveERC3009Token(network: string): `0x${string}` {
     const usdcAddresses: Record<string, `0x${string}`> = {
       'eip155:1': '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
       'eip155:8453': '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
     };
-
     const addr = usdcAddresses[network];
     if (!addr) {
       throw new SettlementError(
@@ -354,9 +293,6 @@ export class SettlementService {
     return addr;
   }
 
-  /**
-   * Conservative native token USD prices per chain.
-   */
   private getNativeTokenUsdPrice(network: string): number {
     switch (network) {
       case 'eip155:1':    return 4000;
@@ -367,146 +303,46 @@ export class SettlementService {
   }
 
   // ==========================================================================
-  // Identity Layer (handle-based lookups, history, etc.)
+  // History (address-based lookups)
   // ==========================================================================
 
-  /**
-   * Verify a payment (identity-based check + optional balance check)
-   */
+  async getHistory(address: string, limit: number = 20, offset: number = 0) {
+    if (!isAddress(address)) {
+      throw new SettlementError(`"${address}" is not a valid Ethereum address.`, 'INVALID_ADDRESS');
+    }
+
+    const { transactions, total } = await this.store.getTransactionsByAddress(address, limit, offset);
+
+    return {
+      address,
+      transactions: transactions.map(tx => ({
+        type: tx.from_address === address ? 'payment_sent' as const : 'payment_received' as const,
+        amount: tx.amount,
+        token: tx.token,
+        fee: tx.fee,
+        gas: tx.gas_cost,
+        to: tx.to_address,
+        from: tx.from_address,
+        tx_hash: tx.tx_hash ?? '',
+        network: tx.network,
+        timestamp: tx.created_at.toISOString(),
+      })),
+      pagination: { limit, offset, total },
+    };
+  }
+
   async verifyPayment(params: {
     from: string;
     amount: string;
     token: string;
     network: string;
-  }): Promise<{
-    valid: boolean;
-    signer?: string;
-    registered?: boolean;
-    error?: string;
-    balanceSufficient?: boolean;
-  }> {
-    const { from, amount, token, network } = params;
-
-    if (isAddress(from)) {
-      const sender = await this.store.getAgentByWallet(from);
-      if (sender) {
-        const balances = await this.store.getBalances(sender.id);
-        const tokenBalance = balances.find(
-          b => b.network === network && b.token === token
-        );
-        const balance = parseFloat(tokenBalance?.balance ?? '0');
-        const required = parseFloat(amount) * (1 + SETTLEMENT_FEE_RATE);
-        return {
-          valid: true,
-          signer: from,
-          registered: true,
-          balanceSufficient: balance >= required,
-        };
-      }
-      return {
-        valid: true,
-        signer: from,
-        registered: false,
-      };
+  }): Promise<{ valid: boolean; signer?: string; error?: string }> {
+    if (!isAddress(params.from)) {
+      return { valid: false, error: `"${params.from}" is not a valid Ethereum address.` };
     }
-
-    const sender = await this.store.getAgentByHandle(from);
-    if (!sender) {
-      return { valid: false, error: `Handle "${from}" not found` };
-    }
-
-    const balances = await this.store.getBalances(sender.id);
-    const tokenBalance = balances.find(
-      b => b.network === network && b.token === token
-    );
-    const balance = parseFloat(tokenBalance?.balance ?? '0');
-    const required = parseFloat(amount) * (1 + SETTLEMENT_FEE_RATE);
-
-    return {
-      valid: true,
-      signer: sender.wallet_address,
-      registered: true,
-      balanceSufficient: balance >= required,
-    };
+    return { valid: true, signer: params.from };
   }
 
-  /**
-   * Get transaction history for a handle or address
-   */
-  async getHistory(
-    handleOrAddress: string,
-    limit: number = 20,
-    offset: number = 0
-  ) {
-    let agent = await this.store.getAgentByHandle(handleOrAddress);
-    if (!agent && isAddress(handleOrAddress)) {
-      agent = await this.store.getAgentByWallet(handleOrAddress);
-    }
-
-    if (agent) {
-      const identifier = agent.full_handle;
-      const { transactions, total } = await this.store.getTransactionsByHandle(
-        handleOrAddress,
-        limit,
-        offset
-      );
-
-      return {
-        handle: identifier,
-        transactions: transactions.map(tx => ({
-          type: tx.from_handle === identifier
-            ? 'payment_sent' as const
-            : 'payment_received' as const,
-          amount: tx.amount,
-          token: tx.token,
-          fee: tx.fee,
-          gas: tx.gas_cost,
-          to: tx.to_address,
-          from: tx.from_handle,
-          tx_hash: tx.tx_hash ?? '',
-          network: tx.network,
-          timestamp: tx.created_at.toISOString(),
-        })),
-        pagination: { limit, offset, total },
-      };
-    }
-
-    if (isAddress(handleOrAddress)) {
-      const { transactions, total } = await this.store.getTransactionsByHandle(
-        handleOrAddress,
-        limit,
-        offset
-      );
-
-      return {
-        address: handleOrAddress,
-        transactions: transactions.map(tx => ({
-          type: tx.from_handle === handleOrAddress
-            ? 'payment_sent' as const
-            : 'payment_received' as const,
-          amount: tx.amount,
-          token: tx.token,
-          fee: tx.fee,
-          gas: tx.gas_cost,
-          to: tx.to_address,
-          from: tx.from_handle,
-          tx_hash: tx.tx_hash ?? '',
-          network: tx.network,
-          timestamp: tx.created_at.toISOString(),
-        })),
-        pagination: { limit, offset, total },
-      };
-    }
-
-    throw new SettlementError(
-      `"${handleOrAddress}" not found. Provide a registered handle or a valid wallet address.`,
-      'NOT_FOUND'
-    );
-  }
-
-  /**
-   * Get fee schedule
-   */
   getFeeSchedule() {
     return {
       rate: SETTLEMENT_FEE_RATE,
@@ -522,10 +358,7 @@ export class SettlementService {
 // ============================================================================
 
 export class SettlementError extends Error {
-  constructor(
-    message: string,
-    public code: string
-  ) {
+  constructor(message: string, public code: string) {
     super(message);
     this.name = 'SettlementError';
     Object.setPrototypeOf(this, SettlementError.prototype);

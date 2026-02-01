@@ -14,8 +14,14 @@ vi.mock('axios', () => ({
 vi.mock('viem', () => ({
   createWalletClient: vi.fn(() => ({
     signTypedData: vi.fn(),
+    writeContract: vi.fn(),
+  })),
+  createPublicClient: vi.fn(() => ({
+    readContract: vi.fn(),
+    waitForTransactionReceipt: vi.fn(),
   })),
   http: vi.fn(),
+  maxUint256: BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'),
 }));
 
 vi.mock('viem/accounts', () => ({
@@ -37,10 +43,11 @@ import {
   PaymentRequiredError,
   PaymentVerificationError,
   UnsupportedNetworkError,
+  Permit2ApprovalRequiredError,
 } from '../src/client/index.js';
-import { createWalletClient } from 'viem';
+import { createWalletClient, createPublicClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { X402_HEADERS } from '../src/types/index.js';
+import { X402_HEADERS, PERMIT2_ADDRESS } from '../src/types/index.js';
 import { BASE_CAIP_ID, BASE_USDC } from '../src/chains/base.js';
 
 // ============================================================================
@@ -79,7 +86,8 @@ const unsupportedNetworkRequirement = {
 
 describe('X402Client', () => {
   let mockAxiosInstance: { request: Mock };
-  let mockWalletClient: { signTypedData: Mock };
+  let mockWalletClient: { signTypedData: Mock; writeContract: Mock; chain: { id: number } };
+  let mockPublicClient: { readContract: Mock; waitForTransactionReceipt: Mock };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -90,10 +98,18 @@ describe('X402Client', () => {
 
     mockWalletClient = {
       signTypedData: vi.fn().mockResolvedValue('0x' + 'ab'.repeat(65)),
+      writeContract: vi.fn().mockResolvedValue('0x' + 'cc'.repeat(32)),
+      chain: { id: 8453 },
+    };
+
+    mockPublicClient = {
+      readContract: vi.fn().mockResolvedValue(BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff')),
+      waitForTransactionReceipt: vi.fn().mockResolvedValue({ status: 'success' }),
     };
 
     (axios.create as Mock).mockReturnValue(mockAxiosInstance);
     (createWalletClient as Mock).mockReturnValue(mockWalletClient);
+    (createPublicClient as Mock).mockReturnValue(mockPublicClient);
   });
 
   afterEach(() => {
@@ -483,6 +499,112 @@ describe('X402Client', () => {
         expect(net + fee).toBe(gross);
         expect(fee).toBe(gross * BigInt(accept.feeBps) / BigInt(10000));
       }
+    });
+  });
+
+  describe('ensurePermit2Approval', () => {
+    it('should skip approval when allowance is sufficient', async () => {
+      // Default mock returns MAX_UINT256 allowance
+      const client = new X402Client({
+        privateKey: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+      });
+
+      await client.ensurePermit2Approval(BASE_USDC.address as `0x${string}`, BigInt('1000000'));
+
+      expect(mockPublicClient.readContract).toHaveBeenCalledWith(
+        expect.objectContaining({
+          address: BASE_USDC.address,
+          functionName: 'allowance',
+        })
+      );
+      // Should NOT call writeContract (no approval needed)
+      expect(mockWalletClient.writeContract).not.toHaveBeenCalled();
+    });
+
+    it('should auto-approve when allowance is zero', async () => {
+      mockPublicClient.readContract.mockResolvedValue(BigInt(0));
+
+      const client = new X402Client({
+        privateKey: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+        autoApprovePermit2: true,
+      });
+
+      await client.ensurePermit2Approval(BASE_USDC.address as `0x${string}`, BigInt('1000000'));
+
+      expect(mockWalletClient.writeContract).toHaveBeenCalledWith(
+        expect.objectContaining({
+          address: BASE_USDC.address,
+          functionName: 'approve',
+        })
+      );
+      expect(mockPublicClient.waitForTransactionReceipt).toHaveBeenCalled();
+    });
+
+    it('should auto-approve when allowance is insufficient', async () => {
+      mockPublicClient.readContract.mockResolvedValue(BigInt(500000));
+
+      const client = new X402Client({
+        privateKey: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+      });
+
+      await client.ensurePermit2Approval(BASE_USDC.address as `0x${string}`, BigInt('1000000'));
+
+      expect(mockWalletClient.writeContract).toHaveBeenCalled();
+    });
+
+    it('should throw Permit2ApprovalRequiredError when autoApprovePermit2 is false', async () => {
+      mockPublicClient.readContract.mockResolvedValue(BigInt(0));
+
+      const client = new X402Client({
+        privateKey: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+        autoApprovePermit2: false,
+      });
+
+      await expect(
+        client.ensurePermit2Approval(BASE_USDC.address as `0x${string}`, BigInt('1000000'))
+      ).rejects.toThrow(Permit2ApprovalRequiredError);
+
+      expect(mockWalletClient.writeContract).not.toHaveBeenCalled();
+    });
+
+    it('should call onPermit2ApprovalNeeded callback before approving', async () => {
+      mockPublicClient.readContract.mockResolvedValue(BigInt(0));
+      const onPermit2ApprovalNeeded = vi.fn();
+
+      const client = new X402Client({
+        privateKey: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+        onPermit2ApprovalNeeded,
+      });
+
+      await client.ensurePermit2Approval(BASE_USDC.address as `0x${string}`, BigInt('1000000'));
+
+      expect(onPermit2ApprovalNeeded).toHaveBeenCalledWith(BASE_USDC.address, PERMIT2_ADDRESS);
+      expect(mockWalletClient.writeContract).toHaveBeenCalled();
+    });
+
+    it('should throw error when no wallet configured', async () => {
+      const client = new X402Client();
+
+      await expect(
+        client.ensurePermit2Approval(BASE_USDC.address as `0x${string}`, BigInt('1000000'))
+      ).rejects.toThrow(PaymentVerificationError);
+    });
+
+    it('should check allowance during Permit2 signPayment flow', async () => {
+      mockPublicClient.readContract.mockResolvedValue(BigInt(0));
+
+      const client = new X402Client({
+        privateKey: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+      });
+
+      const accept = validRequirement.accepts[0]!;
+      await client.signPayment(accept);
+
+      // Should have checked allowance and approved
+      expect(mockPublicClient.readContract).toHaveBeenCalled();
+      expect(mockWalletClient.writeContract).toHaveBeenCalled();
+      // And then signed the payment
+      expect(mockWalletClient.signTypedData).toHaveBeenCalled();
     });
   });
 });

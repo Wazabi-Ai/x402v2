@@ -2,109 +2,76 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { createWalletClient, createPublicClient, http, type PublicClient, type WalletClient, type Chain } from 'viem';
 import { mainnet, bsc, base } from 'viem/chains';
 
-// Load and validate environment configuration
-export interface FacilitatorEnvConfig {
-  // Treasury
-  treasuryPrivateKey: `0x${string}`;
-  treasuryAddress: `0x${string}`;
+// ============================================================================
+// Defaults
+// ============================================================================
 
-  // Contract addresses (per network CAIP-2 ID)
-  entryPointAddress: `0x${string}`;
-  accountFactoryAddresses: Record<string, `0x${string}`>;
-  paymasterAddresses: Record<string, `0x${string}`>;
-  settlementAddresses: Record<string, `0x${string}`>;
-
-  // RPC endpoints
-  rpcUrls: Record<string, string>;
-
-  // Bundler
-  bundlerUrls: Record<string, string>;
-
-  // Database
-  databaseUrl?: string;
-
-  // Server
-  port: number;
-  portalDir?: string;
-}
-
-// Well-known ERC-4337 EntryPoint v0.7
-export const DEFAULT_ENTRYPOINT = '0x0000000071727De22E5E9d8BAf0edAc6f37da032' as `0x${string}`;
-
-// Default RPCs
 export const DEFAULT_RPC_ETH = 'https://eth.llamarpc.com';
 export const DEFAULT_RPC_BSC = 'https://bsc-dataseed.binance.org';
 export const DEFAULT_RPC_BASE = 'https://mainnet.base.org';
 
-export function loadConfig(): FacilitatorEnvConfig {
-  const treasuryPrivateKey = requireEnv('TREASURY_PRIVATE_KEY') as `0x${string}`;
-  const normalizedKey = treasuryPrivateKey.startsWith('0x')
-    ? treasuryPrivateKey
-    : `0x${treasuryPrivateKey}` as `0x${string}`;
-
-  const account = privateKeyToAccount(normalizedKey);
-
-  return {
-    treasuryPrivateKey: normalizedKey,
-    treasuryAddress: account.address,
-
-    entryPointAddress: (process.env['ENTRYPOINT_ADDRESS'] as `0x${string}`) || DEFAULT_ENTRYPOINT,
-
-    accountFactoryAddresses: {
-      'eip155:1': requireEnv('ACCOUNT_FACTORY_ETH') as `0x${string}`,
-      'eip155:56': requireEnv('ACCOUNT_FACTORY_BSC') as `0x${string}`,
-      'eip155:8453': requireEnv('ACCOUNT_FACTORY_BASE') as `0x${string}`,
-    },
-
-    paymasterAddresses: {
-      'eip155:1': requireEnv('PAYMASTER_ETH') as `0x${string}`,
-      'eip155:56': requireEnv('PAYMASTER_BSC') as `0x${string}`,
-      'eip155:8453': requireEnv('PAYMASTER_BASE') as `0x${string}`,
-    },
-
-    settlementAddresses: {
-      'eip155:1': (process.env['SETTLEMENT_ETH'] || '') as `0x${string}`,
-      'eip155:56': (process.env['SETTLEMENT_BSC'] || '') as `0x${string}`,
-      'eip155:8453': (process.env['SETTLEMENT_BASE'] || '') as `0x${string}`,
-    },
-
-    rpcUrls: {
-      'eip155:1': process.env['RPC_ETH'] || DEFAULT_RPC_ETH,
-      'eip155:56': process.env['RPC_BSC'] || DEFAULT_RPC_BSC,
-      'eip155:8453': process.env['RPC_BASE'] || DEFAULT_RPC_BASE,
-    },
-
-    bundlerUrls: {
-      'eip155:1': requireEnv('BUNDLER_URL_ETH'),
-      'eip155:56': requireEnv('BUNDLER_URL_BSC'),
-      'eip155:8453': requireEnv('BUNDLER_URL_BASE'),
-    },
-
-    databaseUrl: process.env['DATABASE_URL'],
-    port: parseInt(process.env['PORT'] || '3000', 10),
-    portalDir: process.env['PORTAL_DIR'],
-  };
-}
-
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value;
-}
-
-// Viem chain objects by CAIP-2 ID
 export const CHAIN_MAP: Record<string, Chain> = {
   'eip155:1': mainnet,
   'eip155:56': bsc,
   'eip155:8453': base,
 };
 
-// Create viem clients from config
-export function createClients(config: FacilitatorEnvConfig) {
-  const account = privateKeyToAccount(config.treasuryPrivateKey);
+// ============================================================================
+// Environment Config
+// ============================================================================
 
+export interface FacilitatorEnvConfig {
+  treasuryAddress: `0x${string}`;
+  treasuryPrivateKey: `0x${string}`;
+  settlementAddresses: Record<string, `0x${string}`>;
+  rpcUrls: Record<string, string>;
+  port: number;
+  portalDir: string;
+}
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing required environment variable: ${name}`);
+  return value;
+}
+
+function optionalEnv(name: string, fallback: string): string {
+  return process.env[name] ?? fallback;
+}
+
+export function loadConfig(): FacilitatorEnvConfig {
+  const treasuryPrivateKey = requireEnv('TREASURY_PRIVATE_KEY') as `0x${string}`;
+  const account = privateKeyToAccount(
+    treasuryPrivateKey.startsWith('0x') ? treasuryPrivateKey : `0x${treasuryPrivateKey}`
+  );
+
+  return {
+    treasuryAddress: account.address,
+    treasuryPrivateKey: treasuryPrivateKey.startsWith('0x') ? treasuryPrivateKey : `0x${treasuryPrivateKey}`,
+    settlementAddresses: {
+      'eip155:1': optionalEnv('SETTLEMENT_ETH', '0x') as `0x${string}`,
+      'eip155:56': optionalEnv('SETTLEMENT_BSC', '0x') as `0x${string}`,
+      'eip155:8453': optionalEnv('SETTLEMENT_BASE', '0x') as `0x${string}`,
+    },
+    rpcUrls: {
+      'eip155:1': optionalEnv('RPC_ETH', DEFAULT_RPC_ETH),
+      'eip155:56': optionalEnv('RPC_BSC', DEFAULT_RPC_BSC),
+      'eip155:8453': optionalEnv('RPC_BASE', DEFAULT_RPC_BASE),
+    },
+    port: parseInt(optionalEnv('PORT', '3000')),
+    portalDir: optionalEnv('PORTAL_DIR', 'facilitator-portal'),
+  };
+}
+
+// ============================================================================
+// Create Viem Clients
+// ============================================================================
+
+export function createClients(config: FacilitatorEnvConfig): {
+  publicClients: Record<string, PublicClient>;
+  walletClients: Record<string, WalletClient>;
+} {
+  const account = privateKeyToAccount(config.treasuryPrivateKey);
   const publicClients: Record<string, PublicClient> = {};
   const walletClients: Record<string, WalletClient> = {};
 
@@ -124,5 +91,5 @@ export function createClients(config: FacilitatorEnvConfig) {
     });
   }
 
-  return { account, publicClients, walletClients };
+  return { publicClients, walletClients };
 }
