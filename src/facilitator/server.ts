@@ -10,8 +10,8 @@ import type { Express, Request, Response } from 'express';
 import type { PublicClient, WalletClient } from 'viem';
 import { InMemoryStore } from './db/schema.js';
 import { SettlementService, SettlementError } from './services/settlement.js';
-import { VerifyRequestSchema, SETTLEMENT_FEE_BPS, SUPPORTED_NETWORK_IDS, isAddress } from './types.js';
-import { PaymentPayloadSchema } from '../types/index.js';
+import { VerifyRequestSchema, SUPPORTED_NETWORK_IDS, isAddress } from './types.js';
+import { PaymentPayloadSchema, DEFAULT_FEE_BPS } from '../types/index.js';
 
 // ============================================================================
 // Facilitator Config
@@ -214,7 +214,7 @@ export function createFacilitator(app: Express, config: FacilitatorConfig): void
         { id: 'eip155:8453', name: 'Base', tokens: ['USDC', 'WETH'] },
       ],
       schemes: ['permit2', 'erc3009'],
-      fee_bps: SETTLEMENT_FEE_BPS,
+      fee_bps: DEFAULT_FEE_BPS,
       fee_description: '0.5% protocol fee, split atomically on-chain',
     });
   });

@@ -65,5 +65,4 @@ export {
   startFacilitator,
   SettlementService,
   InMemoryStore,
-  SETTLEMENT_FEE_RATE,
 } from './facilitator/index.js';

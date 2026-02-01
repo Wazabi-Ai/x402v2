@@ -1,25 +1,20 @@
 import { describe, it, expect } from 'vitest';
 import {
-  SETTLEMENT_FEE_RATE,
-  SETTLEMENT_FEE_BPS,
   SUPPORTED_NETWORK_IDS,
   VerifyRequestSchema,
   isAddress,
   calculateFee,
   calculateNet,
 } from '../src/facilitator/types.js';
+import { DEFAULT_FEE_BPS } from '../src/types/index.js';
 
 // ============================================================================
 // Constants Tests
 // ============================================================================
 
 describe('Facilitator Constants', () => {
-  it('should have correct settlement fee rate (0.5%)', () => {
-    expect(SETTLEMENT_FEE_RATE).toBe(0.005);
-  });
-
-  it('should have correct settlement fee basis points', () => {
-    expect(SETTLEMENT_FEE_BPS).toBe(50);
+  it('should have correct default fee basis points', () => {
+    expect(DEFAULT_FEE_BPS).toBe(50);
   });
 
   it('should support Ethereum, BNB Chain, and Base', () => {

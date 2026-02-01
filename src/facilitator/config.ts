@@ -39,6 +39,28 @@ function optionalEnv(name: string, fallback: string): string {
   return process.env[name] ?? fallback;
 }
 
+const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
+
+function optionalAddress(name: string): `0x${string}` | undefined {
+  const value = process.env[name];
+  if (value && ADDRESS_RE.test(value)) return value as `0x${string}`;
+  return undefined;
+}
+
+function buildSettlementAddresses(): Record<string, `0x${string}`> {
+  const result: Record<string, `0x${string}`> = {};
+  const entries: [string, string][] = [
+    ['eip155:1', 'SETTLEMENT_ETH'],
+    ['eip155:56', 'SETTLEMENT_BSC'],
+    ['eip155:8453', 'SETTLEMENT_BASE'],
+  ];
+  for (const [networkId, envName] of entries) {
+    const addr = optionalAddress(envName);
+    if (addr) result[networkId] = addr;
+  }
+  return result;
+}
+
 export function loadConfig(): FacilitatorEnvConfig {
   const treasuryPrivateKey = requireEnv('TREASURY_PRIVATE_KEY') as `0x${string}`;
   const account = privateKeyToAccount(
@@ -48,18 +70,14 @@ export function loadConfig(): FacilitatorEnvConfig {
   return {
     treasuryAddress: account.address,
     treasuryPrivateKey: treasuryPrivateKey.startsWith('0x') ? treasuryPrivateKey : `0x${treasuryPrivateKey}`,
-    settlementAddresses: {
-      'eip155:1': optionalEnv('SETTLEMENT_ETH', '0x') as `0x${string}`,
-      'eip155:56': optionalEnv('SETTLEMENT_BSC', '0x') as `0x${string}`,
-      'eip155:8453': optionalEnv('SETTLEMENT_BASE', '0x') as `0x${string}`,
-    },
+    settlementAddresses: buildSettlementAddresses(),
     rpcUrls: {
       'eip155:1': optionalEnv('RPC_ETH', DEFAULT_RPC_ETH),
       'eip155:56': optionalEnv('RPC_BSC', DEFAULT_RPC_BSC),
       'eip155:8453': optionalEnv('RPC_BASE', DEFAULT_RPC_BASE),
     },
     port: parseInt(optionalEnv('PORT', '3000')),
-    portalDir: optionalEnv('PORTAL_DIR', 'facilitator-portal'),
+    portalDir: optionalEnv('PORTAL_DIR', 'apps/facilitator-portal'),
   };
 }
 

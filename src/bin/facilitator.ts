@@ -16,7 +16,7 @@
  *   RPC_BSC              — BNB Chain RPC URL (default: public endpoint)
  *   RPC_BASE             — Base RPC URL (default: public endpoint)
  *   PORT                 — Server port (default: 3000)
- *   PORTAL_DIR           — Path to portal static files (default: ./facilitator-portal)
+ *   PORTAL_DIR           — Path to portal static files (default: ./apps/facilitator-portal)
  */
 
 import { resolve } from 'node:path';
@@ -26,7 +26,7 @@ import { loadConfig, createClients } from '../facilitator/config.js';
 const config = loadConfig();
 const { publicClients, walletClients } = createClients(config);
 
-const portalDir = resolve(config.portalDir || 'facilitator-portal');
+const portalDir = resolve(config.portalDir || 'apps/facilitator-portal');
 
 startFacilitator(config.port, {
   portalDir,
