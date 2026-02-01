@@ -114,6 +114,7 @@ export interface DataStore {
   createTransaction(tx: Transaction): Promise<Transaction>;
   getTransaction(id: string): Promise<Transaction | null>;
   updateTransactionStatus(id: string, status: string, txHash?: string): Promise<void>;
+  updateTransactionGas(id: string, gasCost: string): Promise<void>;
   getTransactionsByHandle(handleOrAddress: string, limit?: number, offset?: number): Promise<{ transactions: Transaction[]; total: number }>;
   getTransactionHistory(handle: string, limit?: number, offset?: number): Promise<Transaction[]>;
   getTransactionCount(handle?: string): Promise<number>;
@@ -308,6 +309,13 @@ export class InMemoryStore implements DataStore {
     if (tx) {
       tx.status = status as Transaction['status'];
       if (txHash) tx.tx_hash = txHash;
+    }
+  }
+
+  async updateTransactionGas(id: string, gasCost: string): Promise<void> {
+    const tx = this.transactions.find(t => t.id === id);
+    if (tx) {
+      tx.gas_cost = gasCost;
     }
   }
 

@@ -7,16 +7,20 @@
  *
  * Required environment variables:
  *   TREASURY_PRIVATE_KEY — Treasury wallet private key
+ *   ACCOUNT_FACTORY_ETH  — WazabiAccountFactory on Ethereum
  *   ACCOUNT_FACTORY_BSC  — WazabiAccountFactory on BNB Chain
  *   ACCOUNT_FACTORY_BASE — WazabiAccountFactory on Base
+ *   PAYMASTER_ETH        — Paymaster address on Ethereum
  *   PAYMASTER_BSC        — Paymaster address on BNB Chain
  *   PAYMASTER_BASE       — Paymaster address on Base
+ *   BUNDLER_URL_ETH      — ERC-4337 bundler URL for Ethereum
  *   BUNDLER_URL_BSC      — ERC-4337 bundler URL for BNB Chain
  *   BUNDLER_URL_BASE     — ERC-4337 bundler URL for Base
  *
  * Optional environment variables:
  *   PORT                 — Server port (default: 3000)
  *   PORTAL_DIR           — Path to portal static files (default: ./facilitator-portal)
+ *   RPC_ETH              — Ethereum RPC URL (default: public endpoint)
  *   RPC_BSC              — BNB Chain RPC URL (default: public endpoint)
  *   RPC_BASE             — Base RPC URL (default: public endpoint)
  *   DATABASE_URL         — PostgreSQL connection string (default: in-memory)

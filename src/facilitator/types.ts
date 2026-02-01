@@ -88,6 +88,8 @@ export interface Agent {
   session_key_public: string;
   created_at: Date;
   metadata: Record<string, unknown>;
+  /** Estimated wallet deployment gas cost (USD) awaiting recovery from first settlement */
+  pending_deployment_fee?: string;
 }
 
 /**
@@ -189,9 +191,9 @@ export interface ProfileResponse {
 export const SettleRequestSchema = z.object({
   from: z.string().min(1, 'From handle or address required'),
   to: z.string().min(1, 'To handle or address required'),
-  amount: z.string().regex(/^\d+(\.\d+)?$/, 'Amount must be a numeric string'),
-  token: z.string().default('USDC'),
-  network: z.string().default('eip155:8453'),
+  amount: z.string().regex(/^(?!0\d)\d+(\.\d{1,18})?$/, 'Amount must be a positive numeric string without leading zeros'),
+  token: z.enum(['USDC', 'USDT', 'WETH', 'WBNB'], { message: 'Unsupported token' }).default('USDC'),
+  network: z.enum(['eip155:1', 'eip155:56', 'eip155:8453'], { message: 'Unsupported network' }).default('eip155:8453'),
 });
 
 export type SettleRequest = z.infer<typeof SettleRequestSchema>;
@@ -201,9 +203,9 @@ export type SettleRequest = z.infer<typeof SettleRequestSchema>;
  */
 export const VerifyRequestSchema = z.object({
   from: z.string().min(1, 'From handle or address required'),
-  amount: z.string().regex(/^\d+(\.\d+)?$/, 'Amount must be a numeric string'),
-  token: z.string().default('USDC'),
-  network: z.string().default('eip155:8453'),
+  amount: z.string().regex(/^(?!0\d)\d+(\.\d{1,18})?$/, 'Amount must be a positive numeric string without leading zeros'),
+  token: z.enum(['USDC', 'USDT', 'WETH', 'WBNB'], { message: 'Unsupported token' }).default('USDC'),
+  network: z.enum(['eip155:1', 'eip155:56', 'eip155:8453'], { message: 'Unsupported network' }).default('eip155:8453'),
 });
 
 export type VerifyRequest = z.infer<typeof VerifyRequestSchema>;

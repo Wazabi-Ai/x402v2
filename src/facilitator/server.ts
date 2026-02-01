@@ -26,7 +26,6 @@ import { SettlementService, SettlementError } from './services/settlement.js';
 import { WalletService } from './services/wallet.js';
 import {
   RegisterRequestSchema,
-  SettleRequestSchema,
   VerifyRequestSchema,
   HANDLE_SUFFIX,
   SETTLEMENT_FEE_RATE,
@@ -40,6 +39,7 @@ import type {
   ProfileResponse,
 } from './types.js';
 import { SUPPORTED_NETWORKS, getSupportedNetworkIds } from '../chains/index.js';
+import { PaymentPayloadSchema } from '../types/index.js';
 import type { PublicClient, WalletClient } from 'viem';
 
 // ============================================================================
@@ -53,14 +53,22 @@ export interface FacilitatorConfig {
   walletService?: WalletService;
   /** Enable CORS (default: true) */
   cors?: boolean;
+  /** Allowed CORS origins (default: '*'). Use an array for specific origins. */
+  corsOrigins?: string | string[];
   /** Absolute or relative path to the facilitator-portal directory to serve the dashboard UI at root */
   portalDir?: string;
   /** Treasury wallet address for fee collection (required) */
   treasuryAddress: `0x${string}`;
+  /** WazabiSettlement contract addresses keyed by CAIP-2 network ID */
+  settlementAddresses?: Record<string, `0x${string}`>;
   /** Public clients for on-chain reads, keyed by CAIP-2 network ID (required) */
   publicClients: Record<string, PublicClient>;
   /** Wallet clients for on-chain writes, keyed by CAIP-2 network ID (required) */
   walletClients: Record<string, WalletClient>;
+  /** Rate limit: max requests per window per IP (default: 100) */
+  rateLimitMax?: number;
+  /** Rate limit: window duration in milliseconds (default: 60000 = 1 minute) */
+  rateLimitWindowMs?: number;
 }
 
 /**
@@ -87,23 +95,83 @@ export function createFacilitator(
 
   const settlementService = new SettlementService(handleService, store, {
     treasuryAddress: config.treasuryAddress,
+    settlementAddresses: config.settlementAddresses ?? {},
     publicClients: config.publicClients,
     walletClients: config.walletClients,
   });
 
+  // Security headers
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'");
+    next();
+  });
+
   // CORS middleware
   if (config.cors !== false) {
-    app.use((_req: Request, res: Response, next: NextFunction) => {
-      res.setHeader('Access-Control-Allow-Origin', '*');
+    const allowedOrigins = config.corsOrigins ?? '*';
+
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      if (typeof allowedOrigins === 'string' && allowedOrigins === '*') {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+      } else {
+        const origin = req.headers.origin;
+        const origins = Array.isArray(allowedOrigins) ? allowedOrigins : [allowedOrigins];
+        if (origin && origins.includes(origin)) {
+          res.setHeader('Access-Control-Allow-Origin', origin);
+          res.setHeader('Vary', 'Origin');
+        }
+      }
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Payment-Signature, X-Payment-Payload');
-      if (_req.method === 'OPTIONS') {
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Payment, X-Payment-Required, X-Payment-Response');
+      res.setHeader('Access-Control-Max-Age', '86400');
+      if (req.method === 'OPTIONS') {
         res.sendStatus(204);
         return;
       }
       next();
     });
   }
+
+  // Rate limiting (in-memory, per IP)
+  const rateLimitMax = config.rateLimitMax ?? 100;
+  const rateLimitWindowMs = config.rateLimitWindowMs ?? 60_000;
+  const rateLimitStore = new Map<string, { count: number; resetAt: number }>();
+
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown';
+    const now = Date.now();
+    const entry = rateLimitStore.get(ip);
+
+    if (!entry || now > entry.resetAt) {
+      rateLimitStore.set(ip, { count: 1, resetAt: now + rateLimitWindowMs });
+      res.setHeader('X-RateLimit-Limit', String(rateLimitMax));
+      res.setHeader('X-RateLimit-Remaining', String(rateLimitMax - 1));
+      next();
+      return;
+    }
+
+    entry.count++;
+    const remaining = Math.max(0, rateLimitMax - entry.count);
+    res.setHeader('X-RateLimit-Limit', String(rateLimitMax));
+    res.setHeader('X-RateLimit-Remaining', String(remaining));
+    res.setHeader('X-RateLimit-Reset', String(Math.ceil(entry.resetAt / 1000)));
+
+    if (entry.count > rateLimitMax) {
+      res.status(429).json({
+        error: 'RATE_LIMIT_EXCEEDED',
+        message: `Too many requests. Limit: ${rateLimitMax} per ${rateLimitWindowMs / 1000}s. Try again later.`,
+        retry_after: Math.ceil((entry.resetAt - now) / 1000),
+      });
+      return;
+    }
+
+    next();
+  });
 
   // ========================================================================
   // Health Check
@@ -247,8 +315,8 @@ export function createFacilitator(
         return;
       }
 
-      const limit = parseInt(req.query['limit'] as string) || 20;
-      const offset = parseInt(req.query['offset'] as string) || 0;
+      const limit = Math.min(Math.max(parseInt(req.query['limit'] as string) || 20, 1), 100);
+      const offset = Math.max(parseInt(req.query['offset'] as string) || 0, 0);
 
       const result = await settlementService.getHistory(handle, limit, offset);
       res.json(result);
@@ -377,12 +445,12 @@ export function createFacilitator(
   });
 
   // ========================================================================
-  // POST /settle — Execute payment + 0.5% fee
+  // POST /x402/settle — Non-custodial x402 settlement via WazabiSettlement
   // ========================================================================
 
-  app.post('/settle', async (req: Request, res: Response) => {
+  app.post('/x402/settle', async (req: Request, res: Response) => {
     try {
-      const parsed = SettleRequestSchema.safeParse(req.body);
+      const parsed = PaymentPayloadSchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(400).json({
           error: 'INVALID_REQUEST',
@@ -392,7 +460,7 @@ export function createFacilitator(
         return;
       }
 
-      const result = await settlementService.settle(parsed.data);
+      const result = await settlementService.settleX402(parsed.data);
       res.json(result);
     } catch (error) {
       if (error instanceof SettlementError) {
@@ -403,7 +471,7 @@ export function createFacilitator(
         });
         return;
       }
-      console.error('[facilitator] Settle error:', error);
+      console.error('[facilitator] x402 settle error:', error);
       res.status(500).json({
         error: 'INTERNAL_ERROR',
         message: 'Settlement failed',
@@ -440,9 +508,13 @@ export function createFacilitator(
   // GET /skill.md — OpenClaw skill file
   // ========================================================================
 
-  app.get('/skill.md', (_req: Request, res: Response) => {
+  app.get('/skill.md', (req: Request, res: Response) => {
+    const headers = req.headers ?? {};
+    const proto = headers['x-forwarded-proto'] || req.protocol || 'https';
+    const host = headers['x-forwarded-host'] || headers.host || 'facilitator.wazabi.ai';
+    const baseUrl = `${proto}://${host}`;
     res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
-    res.send(SKILL_MD_CONTENT);
+    res.send(buildSkillMd(baseUrl));
   });
 
   // ========================================================================
@@ -471,7 +543,8 @@ export function createFacilitator(
 // OpenClaw SKILL.md Content (embedded)
 // ============================================================================
 
-const SKILL_MD_CONTENT = `# Wazabi x402 Payment Skill
+function buildSkillMd(baseUrl: string): string {
+  return `# Wazabi x402 Payment Skill
 
 ## Description
 Enable your agent to send and receive payments using the Wazabi x402 protocol.
@@ -485,7 +558,7 @@ Register me for x402 payments with handle <your-handle>
 
 ## API Base URL
 \`\`\`
-https://facilitator.wazabi.ai
+${baseUrl}
 \`\`\`
 
 ## Commands
@@ -539,11 +612,12 @@ When encountering an HTTP 402 response:
 ## Supported Networks
 - Ethereum (eip155:1): USDC, USDT, WETH
 - BNB Chain (eip155:56): USDT, USDC, WBNB
-- Base (eip155:8453): USDC
+- Base (eip155:8453): USDC, WETH
 
 ## Handle Format
 \`<name>.wazabi-x402\` — e.g., \`molty.wazabi-x402\`
 `;
+}
 
 // ============================================================================
 // Standalone Server Factory

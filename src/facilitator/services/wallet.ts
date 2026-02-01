@@ -3,7 +3,7 @@
  *
  * Handles smart wallet provisioning using Account Abstraction (ERC-4337).
  * Provides deterministic wallet addresses via CREATE2 that are identical
- * across all supported chains (BNB Chain + Base).
+ * across all supported chains (Ethereum, BNB Chain, and Base).
  *
  * All contract addresses and RPC endpoints are loaded from the centralized
  * config module (environment variables) rather than being hardcoded.
@@ -22,7 +22,7 @@ import {
   type Hex,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { CHAIN_MAP, DEFAULT_ENTRYPOINT, DEFAULT_RPC_BSC, DEFAULT_RPC_BASE } from '../config.js';
+import { CHAIN_MAP, DEFAULT_ENTRYPOINT, DEFAULT_RPC_ETH, DEFAULT_RPC_BSC, DEFAULT_RPC_BASE } from '../config.js';
 
 // ============================================================================
 // Wallet Service Config
@@ -96,6 +96,7 @@ export class WalletService {
       accountFactoryAddresses: config?.accountFactoryAddresses ?? {},
       paymasterAddresses: config?.paymasterAddresses ?? {},
       rpcUrls: config?.rpcUrls ?? {
+        'eip155:1': DEFAULT_RPC_ETH,
         'eip155:56': DEFAULT_RPC_BSC,
         'eip155:8453': DEFAULT_RPC_BASE,
       },
@@ -118,11 +119,18 @@ export class WalletService {
     ownerAddress: string,
     sessionKeyPublic: string
   ): string {
-    // Use the BSC factory as the canonical address (same on all chains via CREATE2)
+    // Use the first available factory as the canonical address (same on all chains via CREATE2).
+    // All configured factories share the same CREATE2 address, so any one is valid.
+    const factoryValues = Object.values(this.config.accountFactoryAddresses);
     const factoryAddress: `0x${string}` =
+      this.config.accountFactoryAddresses['eip155:1'] ??
       this.config.accountFactoryAddresses['eip155:56'] ??
-      Object.values(this.config.accountFactoryAddresses)[0] ??
-      ('0x0000000000000000000000000000000000000001' as `0x${string}`);
+      this.config.accountFactoryAddresses['eip155:8453'] ??
+      factoryValues[0] ??
+      (() => { throw new Error(
+        'No account factory address configured. ' +
+        'Set ACCOUNT_FACTORY_ETH, ACCOUNT_FACTORY_BSC, or ACCOUNT_FACTORY_BASE environment variable.'
+      ); })();
 
     // Compute salt from handle, owner, and session key
     // Uses bytes32 for session key since it's a 32-byte hash, not a 20-byte address
@@ -225,7 +233,7 @@ export class WalletService {
     if (!bundlerUrl) {
       throw new Error(
         `No bundler URL configured for network "${network}". ` +
-        'Set the BUNDLER_URL_BSC / BUNDLER_URL_BASE environment variable.'
+        'Set the BUNDLER_URL_ETH / BUNDLER_URL_BSC / BUNDLER_URL_BASE environment variable.'
       );
     }
 
@@ -234,7 +242,7 @@ export class WalletService {
     if (!factoryAddress) {
       throw new Error(
         `No account factory address configured for network "${network}". ` +
-        'Set the ACCOUNT_FACTORY_BSC / ACCOUNT_FACTORY_BASE environment variable.'
+        'Set the ACCOUNT_FACTORY_ETH / ACCOUNT_FACTORY_BSC / ACCOUNT_FACTORY_BASE environment variable.'
       );
     }
 
