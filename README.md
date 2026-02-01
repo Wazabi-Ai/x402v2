@@ -16,17 +16,17 @@ Client                         Server
   |  GET /api/premium             |
   |------------------------------>|
   |                               |
-  |  402 + X-PAYMENT-REQUIRED     |
+  |  402 + x-payment-required     |
   |<------------------------------|
   |                               |
   |  Signs EIP-712 payment        |
+  |  (Permit2 or ERC-3009)        |
   |                               |
   |  GET /api/premium             |
-  |  + X-PAYMENT-SIGNATURE        |
-  |  + X-PAYMENT-PAYLOAD          |
+  |  + x-payment (signed payload) |
   |------------------------------>|
   |                               |
-  |  200 OK                       |
+  |  200 OK + x-payment-response  |
   |<------------------------------|
 ```
 
@@ -75,7 +75,7 @@ The middleware returns `402` with payment details to unsigned requests, and veri
 |---------|----|--------|
 | Ethereum | `eip155:1` | USDC (6d), USDT (6d), WETH (18d) |
 | BNB Chain | `eip155:56` | USDT (18d), USDC (18d), WBNB (18d) |
-| Base | `eip155:8453` | USDC (6d) |
+| Base | `eip155:8453` | USDC (6d), WETH (18d) |
 
 ## Installation
 
@@ -113,9 +113,11 @@ await client.post(url, data);
 await client.put(url, data);
 await client.delete(url);
 
-// Or sign manually
-const signed = await client.signPayment(requirement);
+// Or sign manually (returns Permit2Payload or ERC3009Payload)
+const signed = await client.signPayment(acceptEntry);
 ```
+
+The client automatically selects the best payment scheme from the server's `accepts` array, preferring ERC-3009 (no Permit2 approval needed) and falling back to Permit2.
 
 Factory helpers:
 
@@ -132,13 +134,17 @@ const client = createX402ClientFromEnv(); // reads X402_PRIVATE_KEY
 import { x402Middleware } from '@wazabiai/x402/server';
 
 app.use('/api/paid', x402Middleware({
-  recipientAddress: '0x...',   // required
-  amount: '1000000',           // required, smallest unit
-  tokenAddress: '0x...',       // optional, defaults to USDT
-  networkId: 'eip155:1',       // optional, defaults to eip155:56
-  description: 'API access',   // optional
-  excludeRoutes: ['/health'],  // optional
-  facilitatorUrl: 'https://...', // optional, delegate verification
+  recipientAddress: '0x...',     // required
+  amount: '1000000',             // required, smallest unit
+  tokenAddress: '0x...',         // defaults to Base USDC
+  settlementAddress: '0x...',    // WazabiSettlement contract
+  treasuryAddress: '0x...',      // fee recipient address
+  feeBps: 50,                    // fee in basis points (default: 50 = 0.5%)
+  networkId: 'eip155:8453',      // defaults to eip155:8453 (Base)
+  acceptedSchemes: ['permit2'],  // 'permit2' and/or 'erc3009'
+  description: 'API access',     // optional
+  excludeRoutes: ['/health'],    // optional
+  facilitatorUrl: 'https://...', // optional, delegate settlement
 }));
 ```
 
@@ -173,7 +179,7 @@ import {
   formatTokenAmount, parseTokenAmount,
 
   // Base
-  BASE_USDC, BASE_CAIP_ID,
+  BASE_USDC, BASE_WETH, BASE_CAIP_ID,
   formatBaseTokenAmount, parseBaseTokenAmount,
 
   // Registry
@@ -210,11 +216,13 @@ app.listen(3000);
 |--------|------|-------------|
 | POST | `/register` | Register a handle + deploy smart wallet |
 | GET | `/resolve/:handle` | Handle to address lookup |
-| GET | `/balance/:handle` | Token balances |
+| GET | `/balance/:handle` | Token balances across chains |
 | GET | `/history/:handle` | Transaction history |
-| POST | `/settle` | Execute payment (0.5% fee) |
-| POST | `/verify` | Verify x402 payment |
-| GET | `/supported` | Available networks and tokens |
+| GET | `/profile/:handle` | Full agent profile |
+| POST | `/settle` | Execute non-custodial settlement (0.5% fee) |
+| POST | `/verify` | Verify x402 payment signature |
+| GET | `/supported` | Available networks, tokens, and schemes |
+| GET | `/skill.md` | OpenClaw skill file for AI agents |
 | GET | `/health` | Health check |
 
 ### Register
@@ -235,14 +243,20 @@ curl -X POST http://localhost:3000/settle \
   -d '{"from": "agent-a", "to": "agent-b", "amount": "10.00", "token": "USDC", "network": "eip155:8453"}'
 ```
 
-Works with both handles and raw addresses. 0.5% fee is deducted automatically.
+Works with both handles and raw addresses. Settlement is **non-custodial** -- funds move directly from payer to recipient via on-chain contracts. The facilitator submits the transaction but cannot redirect funds because the payer's EIP-712 signature cryptographically commits to the recipient address.
+
+Two settlement paths:
+- **Permit2** -- for any ERC-20 token. Uses Uniswap's canonical Permit2 contract with batch witness transfers. The witness commits to `(recipient, feeBps)` in the payer's signature.
+- **ERC-3009** -- for USDC. Uses native `transferWithAuthorization`. The settlement contract receives the gross amount and atomically splits it to recipient (net) and treasury (fee).
+
+A 0.5% protocol fee (50 basis points, configurable up to 10% max) is split atomically on-chain. The facilitator pays gas but cannot alter the payment destination.
 
 ### Configuration
 
 Copy `.env.example` and set:
 
 ```bash
-TREASURY_PRIVATE_KEY=0x...          # required
+TREASURY_PRIVATE_KEY=0x...          # required, derives treasury address
 
 # Contract addresses (per chain)
 ACCOUNT_FACTORY_ETH=0x...           # required
@@ -251,6 +265,9 @@ ACCOUNT_FACTORY_BASE=0x...
 PAYMASTER_ETH=0x...                 # required
 PAYMASTER_BSC=0x...
 PAYMASTER_BASE=0x...
+SETTLEMENT_ETH=0x...                # WazabiSettlement per chain
+SETTLEMENT_BSC=0x...
+SETTLEMENT_BASE=0x...
 
 # Bundler endpoints
 BUNDLER_URL_ETH=https://...         # required for wallet deployment
@@ -263,6 +280,8 @@ RPC_BSC=https://bsc-dataseed.binance.org
 RPC_BASE=https://mainnet.base.org
 DATABASE_URL=postgresql://...       # defaults to in-memory
 PORT=3000
+PORTAL_DIR=./facilitator-portal     # dashboard UI directory
+ENTRYPOINT_ADDRESS=0x...            # ERC-4337 EntryPoint (v0.7 default)
 ```
 
 ## OpenClaw (AI Agent Integration)
@@ -284,20 +303,21 @@ No special SDK needed on the agent side -- just HTTP and the skill file.
 
 ## Smart contracts
 
-Three Solidity contracts in `contracts/` power the ERC-4337 wallet system:
+Four Solidity contracts in `contracts/` (Solidity 0.8.24):
 
-- **WazabiAccount** -- Smart wallet with session keys and spending limits
-- **WazabiAccountFactory** -- CREATE2 factory for deterministic addresses
-- **WazabiPaymaster** -- Gas sponsorship via ERC-20 token payment
+- **WazabiSettlement** -- Non-custodial payment settlement with Permit2 batch witness and ERC-3009 paths. Atomically splits funds between recipient (net) and treasury (fee). The payer's signature commits to the recipient and fee rate, so the facilitator cannot redirect funds.
+- **WazabiAccount** -- ERC-4337 smart wallet with session key management, per-transaction and daily spending limits, and owner recovery
+- **WazabiAccountFactory** -- CREATE2 factory producing identical wallet addresses across all EVM chains (ERC-1967 proxy pattern)
+- **WazabiPaymaster** -- Gas sponsorship via ERC-20 token payment for UserOperations
 
-Compile with `npx hardhat compile`. Deployment requires wallet access and is separate from the SDK build.
+Compile with `npx hardhat compile`. Deploy with `npx hardhat run scripts/deploy.ts --network <network>`.
 
 ## Development
 
 ```bash
 npm install
 npm run build          # ESM + CJS + declarations
-npm test               # 336 tests via Vitest
+npm test               # 344 tests via Vitest
 npm run dev            # build with watch
 ```
 
@@ -306,18 +326,37 @@ npm run dev            # build with watch
 x402 uses [EIP-712](https://eips.ethereum.org/EIPS/eip-712) typed data signatures over HTTP headers.
 
 **Headers:**
-- `x-payment-required` -- Server sends payment details (amount, token, network, recipient)
-- `x-payment-signature` -- Client sends EIP-712 signature
-- `x-payment-payload` -- Client sends signed payload
+- `x-payment-required` -- Server sends payment details (402 response with `accepts` array)
+- `x-payment` -- Client sends signed payment payload (Permit2 or ERC-3009)
+- `x-payment-response` -- Server sends settlement result (200 response)
 
-**EIP-712 domain:** `{ name: 'x402', version: '2.0.0', chainId }`
+**Payment schemes:**
 
-**Payment type:**
+*Permit2* (any ERC-20 via Uniswap canonical contract):
 ```
-Payment(uint256 amount, address token, uint256 chainId, address payTo, address payer, uint256 deadline, string nonce, string resource)
+Domain: { name: 'Permit2', chainId, verifyingContract: PERMIT2_ADDRESS }
+PermitBatchWitnessTransferFrom(TokenPermissions[] permitted, address spender, uint256 nonce, uint256 deadline, SettlementWitness witness)
+SettlementWitness(address recipient, uint256 feeBps)
+```
+
+*ERC-3009* (USDC native transferWithAuthorization):
+```
+Domain: { name: 'USD Coin', version: '2', chainId, verifyingContract: tokenAddress }
+TransferWithAuthorization(address from, address to, uint256 value, uint256 validAfter, uint256 validBefore, bytes32 nonce)
 ```
 
 Replay protection via per-nonce tracking with 10-minute TTL.
+
+## Security
+
+The facilitator includes production security hardening:
+
+- **Rate limiting** -- 100 requests per minute per IP (configurable via `rateLimitMax`)
+- **Security headers** -- CSP, HSTS, X-Frame-Options, X-Content-Type-Options
+- **CORS** -- Configurable origin allowlists (`corsOrigins` option)
+- **Request validation** -- Zod schemas with strict field validation (enum types, address/amount regex)
+- **Nonce replay protection** -- Per-nonce registry with 10-minute TTL and periodic cleanup
+- **Non-custodial settlement** -- Payer signatures commit to recipient; facilitator cannot redirect funds
 
 ## License
 
