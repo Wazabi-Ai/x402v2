@@ -41,7 +41,41 @@ import {
 import { createWalletClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { X402_HEADERS } from '../src/types/index.js';
-import { BSC_USDT, BSC_CAIP_ID } from '../src/chains/bnb.js';
+import { BASE_CAIP_ID, BASE_USDC } from '../src/chains/base.js';
+
+// ============================================================================
+// Valid payment requirement with new accepts format
+// ============================================================================
+
+const validRequirement = {
+  x402Version: '2.0.0',
+  accepts: [{
+    scheme: 'permit2' as const,
+    network: BASE_CAIP_ID,
+    token: BASE_USDC.address,
+    amount: '1000000',
+    recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f4b123',
+    settlement: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    treasury: '0x1b4F633B1FC5FC26Fb8b722b2373B3d4D71aCaeB',
+    feeBps: 50,
+    maxDeadline: Math.floor(Date.now() / 1000) + 300,
+  }],
+};
+
+const unsupportedNetworkRequirement = {
+  x402Version: '2.0.0',
+  accepts: [{
+    scheme: 'permit2' as const,
+    network: 'eip155:1',
+    token: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+    amount: '1000000',
+    recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f4b123',
+    settlement: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    treasury: '0x1b4F633B1FC5FC26Fb8b722b2373B3d4D71aCaeB',
+    feeBps: 50,
+    maxDeadline: Math.floor(Date.now() / 1000) + 300,
+  }],
+};
 
 describe('X402Client', () => {
   let mockAxiosInstance: { request: Mock };
@@ -49,13 +83,13 @@ describe('X402Client', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    
+
     mockAxiosInstance = {
       request: vi.fn(),
     };
-    
+
     mockWalletClient = {
-      signTypedData: vi.fn().mockResolvedValue('0xmocksignature'),
+      signTypedData: vi.fn().mockResolvedValue('0x' + 'ab'.repeat(65)),
     };
 
     (axios.create as Mock).mockReturnValue(mockAxiosInstance);
@@ -128,17 +162,11 @@ describe('X402Client', () => {
 
     it('should throw PaymentRequiredError when autoRetry is false', async () => {
       const client = new X402Client({ autoRetry: false });
-      const requirement = {
-        amount: '1000000000000000000',
-        token: BSC_USDT.address,
-        network_id: BSC_CAIP_ID,
-        pay_to: '0x742d35Cc6634C0532925a3b844Bc9e7595f4b123',
-      };
-      
+
       mockAxiosInstance.request.mockResolvedValue({
         status: 402,
         headers: {
-          [X402_HEADERS.PAYMENT_REQUIRED]: JSON.stringify(requirement),
+          [X402_HEADERS.PAYMENT_REQUIRED]: JSON.stringify(validRequirement),
         },
       });
 
@@ -147,17 +175,11 @@ describe('X402Client', () => {
 
     it('should throw PaymentRequiredError when no signer configured', async () => {
       const client = new X402Client({ autoRetry: true });
-      const requirement = {
-        amount: '1000000000000000000',
-        token: BSC_USDT.address,
-        network_id: BSC_CAIP_ID,
-        pay_to: '0x742d35Cc6634C0532925a3b844Bc9e7595f4b123',
-      };
-      
+
       mockAxiosInstance.request.mockResolvedValue({
         status: 402,
         headers: {
-          [X402_HEADERS.PAYMENT_REQUIRED]: JSON.stringify(requirement),
+          [X402_HEADERS.PAYMENT_REQUIRED]: JSON.stringify(validRequirement),
         },
       });
 
@@ -169,44 +191,28 @@ describe('X402Client', () => {
         privateKey: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
         supportedNetworks: ['eip155:56'],
       });
-      const requirement = {
-        amount: '1000000000000000000',
-        token: BSC_USDT.address,
-        network_id: 'eip155:1', // Ethereum mainnet - not supported
-        pay_to: '0x742d35Cc6634C0532925a3b844Bc9e7595f4b123',
-      };
-      
+
       mockAxiosInstance.request.mockResolvedValue({
         status: 402,
         headers: {
-          [X402_HEADERS.PAYMENT_REQUIRED]: JSON.stringify(requirement),
+          [X402_HEADERS.PAYMENT_REQUIRED]: JSON.stringify(unsupportedNetworkRequirement),
         },
       });
 
       await expect(client.fetch('https://api.example.com/paid')).rejects.toThrow(UnsupportedNetworkError);
     });
 
-    it('should retry with payment signature on 402', async () => {
+    it('should retry with payment in x-payment header on 402', async () => {
       const client = new X402Client({
         privateKey: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
         autoRetry: true,
       });
-      
-      const requirement = {
-        amount: '1000000000000000000',
-        token: BSC_USDT.address,
-        network_id: BSC_CAIP_ID,
-        pay_to: '0x742d35Cc6634C0532925a3b844Bc9e7595f4b123',
-        expires_at: Math.floor(Date.now() / 1000) + 300,
-        nonce: 'testnonce123',
-      };
 
-      // First call returns 402, second call succeeds
       mockAxiosInstance.request
         .mockResolvedValueOnce({
           status: 402,
           headers: {
-            [X402_HEADERS.PAYMENT_REQUIRED]: JSON.stringify(requirement),
+            [X402_HEADERS.PAYMENT_REQUIRED]: JSON.stringify(validRequirement),
           },
         })
         .mockResolvedValueOnce({
@@ -219,6 +225,13 @@ describe('X402Client', () => {
       expect(mockAxiosInstance.request).toHaveBeenCalledTimes(2);
       expect(mockWalletClient.signTypedData).toHaveBeenCalled();
       expect(response.data).toEqual({ message: 'success' });
+
+      // Second call should include x-payment header with PaymentPayload JSON
+      const secondCall = mockAxiosInstance.request.mock.calls[1]![0];
+      expect(secondCall.headers[X402_HEADERS.PAYMENT]).toBeDefined();
+      const payment = JSON.parse(secondCall.headers[X402_HEADERS.PAYMENT]);
+      expect(payment.scheme).toBe('permit2');
+      expect(payment.network).toBe(BASE_CAIP_ID);
     });
 
     it('should call onPaymentRequired callback', async () => {
@@ -227,23 +240,23 @@ describe('X402Client', () => {
         autoRetry: false,
         onPaymentRequired,
       });
-      
-      const requirement = {
-        amount: '1000000000000000000',
-        token: BSC_USDT.address,
-        network_id: BSC_CAIP_ID,
-        pay_to: '0x742d35Cc6634C0532925a3b844Bc9e7595f4b123',
-      };
 
       mockAxiosInstance.request.mockResolvedValue({
         status: 402,
         headers: {
-          [X402_HEADERS.PAYMENT_REQUIRED]: JSON.stringify(requirement),
+          [X402_HEADERS.PAYMENT_REQUIRED]: JSON.stringify(validRequirement),
         },
       });
 
       await expect(client.fetch('https://api.example.com/paid')).rejects.toThrow();
-      expect(onPaymentRequired).toHaveBeenCalledWith(expect.objectContaining(requirement));
+      expect(onPaymentRequired).toHaveBeenCalledWith(
+        expect.objectContaining({
+          x402Version: '2.0.0',
+          accepts: expect.arrayContaining([
+            expect.objectContaining({ scheme: 'permit2', network: BASE_CAIP_ID }),
+          ]),
+        })
+      );
     });
 
     it('should call onPaymentSigned callback', async () => {
@@ -253,21 +266,12 @@ describe('X402Client', () => {
         autoRetry: true,
         onPaymentSigned,
       });
-      
-      const requirement = {
-        amount: '1000000000000000000',
-        token: BSC_USDT.address,
-        network_id: BSC_CAIP_ID,
-        pay_to: '0x742d35Cc6634C0532925a3b844Bc9e7595f4b123',
-        expires_at: Math.floor(Date.now() / 1000) + 300,
-        nonce: 'testnonce123',
-      };
 
       mockAxiosInstance.request
         .mockResolvedValueOnce({
           status: 402,
           headers: {
-            [X402_HEADERS.PAYMENT_REQUIRED]: JSON.stringify(requirement),
+            [X402_HEADERS.PAYMENT_REQUIRED]: JSON.stringify(validRequirement),
           },
         })
         .mockResolvedValueOnce({
@@ -276,24 +280,22 @@ describe('X402Client', () => {
         });
 
       await client.fetch('https://api.example.com/paid');
-      expect(onPaymentSigned).toHaveBeenCalledWith(expect.objectContaining({
-        signature: '0xmocksignature',
-      }));
+      expect(onPaymentSigned).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scheme: 'permit2',
+          network: BASE_CAIP_ID,
+          signature: expect.any(String),
+        })
+      );
     });
 
     it('should parse payment requirement from response body if header missing', async () => {
       const client = new X402Client({ autoRetry: false });
-      const requirement = {
-        amount: '1000000000000000000',
-        token: BSC_USDT.address,
-        network_id: BSC_CAIP_ID,
-        pay_to: '0x742d35Cc6634C0532925a3b844Bc9e7595f4b123',
-      };
-      
+
       mockAxiosInstance.request.mockResolvedValue({
         status: 402,
         headers: {},
-        data: requirement,
+        data: validRequirement,
       });
 
       await expect(client.fetch('https://api.example.com/paid')).rejects.toThrow(PaymentRequiredError);
@@ -301,7 +303,7 @@ describe('X402Client', () => {
 
     it('should throw PaymentVerificationError for invalid header JSON', async () => {
       const client = new X402Client({ autoRetry: false });
-      
+
       mockAxiosInstance.request.mockResolvedValue({
         status: 402,
         headers: {
@@ -314,7 +316,7 @@ describe('X402Client', () => {
 
     it('should throw PaymentVerificationError for missing requirement', async () => {
       const client = new X402Client({ autoRetry: false });
-      
+
       mockAxiosInstance.request.mockResolvedValue({
         status: 402,
         headers: {},
@@ -326,15 +328,17 @@ describe('X402Client', () => {
 
     it('should throw PaymentVerificationError for invalid requirement schema', async () => {
       const client = new X402Client({ autoRetry: false });
-      
-      // Valid JSON but doesn't match PaymentRequirementSchema
+
       const invalidRequirement = {
-        amount: 'not-a-number', // Invalid: should be numeric string
-        token: BSC_USDT.address,
-        network_id: BSC_CAIP_ID,
-        pay_to: '0x742d35Cc6634C0532925a3b844Bc9e7595f4b123',
+        x402Version: '2.0.0',
+        accepts: [{
+          scheme: 'permit2',
+          network: 'invalid-network',
+          token: '0x123',
+          amount: 'not-a-number',
+        }],
       };
-      
+
       mockAxiosInstance.request.mockResolvedValue({
         status: 402,
         headers: {
@@ -351,26 +355,15 @@ describe('X402Client', () => {
         autoRetry: true,
         maxRetries: 2,
       });
-      
-      const requirement = {
-        amount: '1000000000000000000',
-        token: BSC_USDT.address,
-        network_id: BSC_CAIP_ID,
-        pay_to: '0x742d35Cc6634C0532925a3b844Bc9e7595f4b123',
-        expires_at: Math.floor(Date.now() / 1000) + 300,
-        nonce: 'testnonce123',
-      };
 
-      // Keep returning 402 - should eventually give up
       mockAxiosInstance.request.mockResolvedValue({
         status: 402,
         headers: {
-          [X402_HEADERS.PAYMENT_REQUIRED]: JSON.stringify(requirement),
+          [X402_HEADERS.PAYMENT_REQUIRED]: JSON.stringify(validRequirement),
         },
       });
 
       await expect(client.fetch('https://api.example.com/paid')).rejects.toThrow(PaymentRequiredError);
-      // Initial request + maxRetries
       expect(mockAxiosInstance.request).toHaveBeenCalledTimes(3);
     });
   });
@@ -418,79 +411,78 @@ describe('X402Client', () => {
   describe('signPayment', () => {
     it('should throw error if no wallet configured', async () => {
       const client = new X402Client();
-      const requirement = {
-        amount: '1000000000000000000',
-        token: BSC_USDT.address,
-        network_id: BSC_CAIP_ID,
-        pay_to: '0x742d35Cc6634C0532925a3b844Bc9e7595f4b123',
-      };
-
-      await expect(client.signPayment(requirement)).rejects.toThrow(PaymentVerificationError);
+      const accept = validRequirement.accepts[0]!;
+      await expect(client.signPayment(accept)).rejects.toThrow(PaymentVerificationError);
     });
 
-    it('should sign payment and return SignedPayment', async () => {
+    it('should sign Permit2 payment and return PaymentPayload', async () => {
       const client = new X402Client({
         privateKey: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
       });
-      
-      const requirement = {
-        amount: '1000000000000000000',
-        token: BSC_USDT.address,
-        network_id: BSC_CAIP_ID,
-        pay_to: '0x742d35Cc6634C0532925a3b844Bc9e7595f4b123',
-        expires_at: Math.floor(Date.now() / 1000) + 300,
-        nonce: 'testnonce123',
-      };
 
-      const signed = await client.signPayment(requirement);
+      const accept = validRequirement.accepts[0]!;
+      const payload = await client.signPayment(accept);
 
-      expect(signed).toHaveProperty('signature', '0xmocksignature');
-      expect(signed).toHaveProperty('signer', '0x742d35Cc6634C0532925a3b844Bc9e7595f4b123');
-      expect(signed.payload).toMatchObject({
-        amount: requirement.amount,
-        token: requirement.token,
-        chainId: 56,
-        payTo: requirement.pay_to,
-      });
+      expect(payload.scheme).toBe('permit2');
+      expect(payload.network).toBe(BASE_CAIP_ID);
+      expect(payload.payer).toBe('0x742d35Cc6634C0532925a3b844Bc9e7595f4b123');
+      expect(payload.signature).toBeDefined();
+      expect(mockWalletClient.signTypedData).toHaveBeenCalled();
+
+      if (payload.scheme === 'permit2') {
+        expect(payload.permit.permitted).toHaveLength(2);
+        expect(payload.witness.recipient).toBe(accept.recipient);
+        expect(payload.witness.feeBps).toBe(accept.feeBps);
+        expect(payload.spender).toBe(accept.settlement);
+      }
     });
 
-    it('should use default deadline if expires_at not provided', async () => {
-      const client = new X402Client({
-        privateKey: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
-        defaultDeadline: 600, // 10 minutes
-      });
-      
-      const requirement = {
-        amount: '1000000000000000000',
-        token: BSC_USDT.address,
-        network_id: BSC_CAIP_ID,
-        pay_to: '0x742d35Cc6634C0532925a3b844Bc9e7595f4b123',
-      };
-
-      const signed = await client.signPayment(requirement);
-
-      // Deadline should be roughly now + 600 seconds
-      const now = Math.floor(Date.now() / 1000);
-      expect(signed.payload.deadline).toBeGreaterThanOrEqual(now + 590);
-      expect(signed.payload.deadline).toBeLessThanOrEqual(now + 610);
-    });
-
-    it('should generate nonce if not provided', async () => {
+    it('should sign ERC-3009 payment when scheme is erc3009', async () => {
       const client = new X402Client({
         privateKey: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
       });
-      
-      const requirement = {
-        amount: '1000000000000000000',
-        token: BSC_USDT.address,
-        network_id: BSC_CAIP_ID,
-        pay_to: '0x742d35Cc6634C0532925a3b844Bc9e7595f4b123',
+
+      const erc3009Accept = {
+        scheme: 'erc3009' as const,
+        network: BASE_CAIP_ID,
+        token: BASE_USDC.address,
+        amount: '1000000',
+        recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f4b123',
+        settlement: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        treasury: '0x1b4F633B1FC5FC26Fb8b722b2373B3d4D71aCaeB',
+        feeBps: 50,
+        maxDeadline: Math.floor(Date.now() / 1000) + 300,
       };
 
-      const signed = await client.signPayment(requirement);
+      const payload = await client.signPayment(erc3009Accept);
 
-      expect(signed.payload.nonce).toBeDefined();
-      expect(signed.payload.nonce.length).toBe(32); // generateNonce creates 32 char hex
+      expect(payload.scheme).toBe('erc3009');
+      expect(payload.network).toBe(BASE_CAIP_ID);
+      expect(payload.signature).toBeDefined();
+
+      if (payload.scheme === 'erc3009') {
+        expect(payload.authorization.from).toBe('0x742d35Cc6634C0532925a3b844Bc9e7595f4b123');
+        expect(payload.authorization.to).toBe(erc3009Accept.settlement);
+        expect(payload.authorization.value).toBe(erc3009Accept.amount);
+        expect(payload.recipient).toBe(erc3009Accept.recipient);
+      }
+    });
+
+    it('should split amount into net and fee for Permit2', async () => {
+      const client = new X402Client({
+        privateKey: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+      });
+
+      const accept = validRequirement.accepts[0]!;
+      const payload = await client.signPayment(accept);
+
+      if (payload.scheme === 'permit2') {
+        const net = BigInt(payload.permit.permitted[0]!.amount);
+        const fee = BigInt(payload.permit.permitted[1]!.amount);
+        const gross = BigInt(accept.amount);
+        expect(net + fee).toBe(gross);
+        expect(fee).toBe(gross * BigInt(accept.feeBps) / BigInt(10000));
+      }
     });
   });
 });
@@ -529,12 +521,12 @@ describe('createX402ClientFromEnv', () => {
   it('should create read-only client when no private key in environment', () => {
     delete process.env['X402_PRIVATE_KEY'];
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    
+
     const client = createX402ClientFromEnv();
-    
+
     expect(client.canSign).toBe(false);
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('X402_PRIVATE_KEY not found'));
-    
+
     warnSpy.mockRestore();
   });
 

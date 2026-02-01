@@ -25,6 +25,9 @@ const WAZABI_TREASURY = '0x1b4F633B1FC5FC26Fb8b722b2373B3d4D71aCaeB';
 // ERC-4337 EntryPoint v0.7 (same address on all EVM chains)
 const ENTRYPOINT = '0x0000000071727De22E5E9d8BAf0edAc6f37da032';
 
+// Default fee in basis points (50 = 0.5%)
+const DEFAULT_FEE_BPS = 50;
+
 // Minimum native token deposit for the paymaster at the EntryPoint.
 // The paymaster must have a deposit so it can sponsor UserOperations.
 // This amount is in native token (ETH/BNB) and should cover initial gas costs.
@@ -61,9 +64,18 @@ async function main() {
   const paymasterAddress = await paymaster.getAddress();
   console.log(`   WazabiPaymaster: ${paymasterAddress}`);
 
-  // 3. Configure paymaster with supported tokens
+  // 3. Deploy WazabiSettlement (non-custodial x402 settlement with fee splitting)
+  const feeBps = parseInt(process.env.FEE_BPS || String(DEFAULT_FEE_BPS));
+  console.log(`3. Deploying WazabiSettlement (treasury=${treasuryAddress}, feeBps=${feeBps})...`);
+  const WazabiSettlement = await ethers.getContractFactory('WazabiSettlement');
+  const settlement = await WazabiSettlement.deploy(treasuryAddress, feeBps);
+  await settlement.waitForDeployment();
+  const settlementAddress = await settlement.getAddress();
+  console.log(`   WazabiSettlement: ${settlementAddress}`);
+
+  // 4. Configure paymaster with supported tokens
   const networkTokens = TOKENS[networkName] || {};
-  let step = 3;
+  let step = 4;
   for (const [symbol, address] of Object.entries(networkTokens)) {
     console.log(`${step}. Adding ${symbol} (${address}) to paymaster...`);
     const tx = await paymaster.addSupportedToken(address, ethers.parseUnits('1', 18)); // 1:1 initial ratio
@@ -95,6 +107,7 @@ async function main() {
       WazabiAccount: accountImplAddress,
       WazabiAccountFactory: factoryAddress,
       WazabiPaymaster: paymasterAddress,
+      WazabiSettlement: settlementAddress,
     },
     tokens: networkTokens,
     entryPoint: ENTRYPOINT,
@@ -114,6 +127,7 @@ async function main() {
   console.log('Add these to your .env:');
   console.log(`ACCOUNT_FACTORY_${networkName.toUpperCase()}=${factoryAddress}`);
   console.log(`PAYMASTER_${networkName.toUpperCase()}=${paymasterAddress}`);
+  console.log(`SETTLEMENT_${networkName.toUpperCase()}=${settlementAddress}`);
   console.log(`TREASURY_ADDRESS=${treasuryAddress}`);
 }
 

@@ -47,6 +47,7 @@ export const BASE_USDC: TokenConfig = {
   symbol: 'USDC',
   decimals: 6,
   name: 'USD Coin',
+  supportsERC3009: true,
 } as const;
 
 /**

@@ -1,67 +1,96 @@
 /**
  * Settlement Service
  *
- * Handles payment settlement with 0.5% fee collection.
- * ALL gas costs are passed through to the user -- the treasury never absorbs gas.
+ * Handles x402 payment settlement via WazabiSettlement contract.
  *
- * Requires a SettlementConfig with treasury wallet and viem clients to
- * execute real on-chain ERC-20 transfers.
+ * Two settlement paths (non-custodial):
+ *   1. Permit2 — calls WazabiSettlement.settle() with the payer's batch witness signature.
+ *      Funds move directly from payer → recipient (net) and payer → treasury (fee).
  *
- * Supports two identity types:
- *   1. Registered agents -- identified by handle (e.g., "molty" or "molty.wazabi-x402")
- *   2. Unregistered users -- identified by raw Ethereum address (e.g., "0x...")
+ *   2. ERC-3009 — calls WazabiSettlement.settleWithAuthorization() with the payer's
+ *      transferWithAuthorization signature. Contract receives gross, immediately splits.
  *
- * Registration is NOT required. Any valid Ethereum address can use /settle and /verify.
+ * The facilitator pays gas but cannot redirect funds. The payer's EIP-712 signature
+ * cryptographically commits to the recipient and fee rate.
  *
- * Gas cost model:
- *   - Before settlement, gas cost is estimated using on-chain gas price data.
- *   - The estimated gas is deducted from the user's gross amount up front.
- *   - After the on-chain transfer, the actual gas cost is calculated from the
- *     transaction receipt (gasUsed * effectiveGasPrice) and the transaction
- *     record is updated with the real cost.
- *   - The treasury retains: protocol fee (0.5%) + actual gas cost in native tokens.
- *
- * Settlement flow:
- *   - The payer transfers the full gross amount to the treasury via x402 payment.
- *   - The treasury forwards the net amount (gross - fee - gas) to the recipient.
- *   - The protocol fee and gas cost remain in the treasury automatically.
+ * Identity layer integration:
+ *   - verifyPayment() and getHistory() still support handle-based lookups.
+ *   - The old custodial settle() is replaced by settleX402().
  */
 
 import { randomUUID } from 'crypto';
 import type { PublicClient, WalletClient } from 'viem';
 import type { InMemoryStore } from '../db/schema.js';
-import type { Agent, Transaction, SettleRequest, SettleResponse } from '../types.js';
+import type { Transaction } from '../types.js';
 import {
   SETTLEMENT_FEE_RATE,
   SETTLEMENT_FEE_BPS,
-  calculateFee,
-  calculateNet,
   isAddress,
 } from '../types.js';
-import { getTokenForNetwork } from '../../chains/index.js';
 import type { HandleService } from './handle.js';
+import type {
+  PaymentPayload,
+  Permit2Payload,
+  ERC3009Payload,
+  PaymentResponse,
+} from '../../types/index.js';
 
 // ============================================================================
-// ERC-20 ABI (minimal subset for transfer + balanceOf)
+// WazabiSettlement Contract ABI (minimal)
 // ============================================================================
 
-const erc20Abi = [
+const wazabiSettlementAbi = [
   {
-    name: 'transfer',
+    name: 'settle',
     type: 'function',
     stateMutability: 'nonpayable',
     inputs: [
-      { name: 'to', type: 'address' },
-      { name: 'value', type: 'uint256' },
+      {
+        name: 'permit',
+        type: 'tuple',
+        components: [
+          {
+            name: 'permitted',
+            type: 'tuple[]',
+            components: [
+              { name: 'token', type: 'address' },
+              { name: 'amount', type: 'uint256' },
+            ],
+          },
+          { name: 'nonce', type: 'uint256' },
+          { name: 'deadline', type: 'uint256' },
+        ],
+      },
+      { name: 'payer', type: 'address' },
+      {
+        name: 'witness',
+        type: 'tuple',
+        components: [
+          { name: 'recipient', type: 'address' },
+          { name: 'feeBps', type: 'uint256' },
+        ],
+      },
+      { name: 'signature', type: 'bytes' },
     ],
-    outputs: [{ name: '', type: 'bool' }],
+    outputs: [],
   },
   {
-    name: 'balanceOf',
+    name: 'settleWithAuthorization',
     type: 'function',
-    stateMutability: 'view',
-    inputs: [{ name: 'account', type: 'address' }],
-    outputs: [{ name: '', type: 'uint256' }],
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'token', type: 'address' },
+      { name: 'payer', type: 'address' },
+      { name: 'recipient', type: 'address' },
+      { name: 'grossAmount', type: 'uint256' },
+      { name: 'validAfter', type: 'uint256' },
+      { name: 'validBefore', type: 'uint256' },
+      { name: 'nonce', type: 'bytes32' },
+      { name: 'v', type: 'uint8' },
+      { name: 'r', type: 'bytes32' },
+      { name: 's', type: 'bytes32' },
+    ],
+    outputs: [],
   },
 ] as const;
 
@@ -69,35 +98,27 @@ const erc20Abi = [
 // Settlement Configuration
 // ============================================================================
 
-/**
- * Configuration for on-chain settlement.
- *
- * Required. Contains treasury wallet and viem clients for executing
- * real ERC-20 transfers on supported networks.
- */
 export interface SettlementConfig {
-  /** Treasury wallet address that holds funds and executes transfers */
+  /** Treasury wallet address that receives protocol fees */
   treasuryAddress: `0x${string}`;
-  /** Public clients keyed by CAIP-2 network ID (e.g. "eip155:8453") */
+  /** WazabiSettlement contract addresses keyed by CAIP-2 network ID */
+  settlementAddresses: Record<string, `0x${string}`>;
+  /** Public clients keyed by CAIP-2 network ID */
   publicClients: Record<string, PublicClient>;
-  /** Wallet clients keyed by CAIP-2 network ID, with account + chain configured */
+  /** Wallet clients keyed by CAIP-2 network ID (facilitator account, pays gas) */
   walletClients: Record<string, WalletClient>;
 }
 
 // ============================================================================
-// Utility: Parse human-readable amount to on-chain token units
+// Utility: Split packed EIP-712 signature into v, r, s
 // ============================================================================
 
-/**
- * Convert a human-readable decimal string (e.g. "100.50") to the smallest
- * on-chain unit for a token with the given number of decimals.
- *
- * Example: parseAmountToUnits("100.50", 6) => 100500000n
- */
-function parseAmountToUnits(amount: string, decimals: number): bigint {
-  const [whole = '0', fractional = ''] = amount.split('.');
-  const paddedFractional = fractional.padEnd(decimals, '0').slice(0, decimals);
-  return BigInt(whole + paddedFractional);
+function splitSignature(sig: string): { v: number; r: `0x${string}`; s: `0x${string}` } {
+  const bytes = sig.startsWith('0x') ? sig.slice(2) : sig;
+  const r = `0x${bytes.slice(0, 64)}` as `0x${string}`;
+  const s = `0x${bytes.slice(64, 128)}` as `0x${string}`;
+  const v = parseInt(bytes.slice(128, 130), 16);
+  return { v, r, s };
 }
 
 // ============================================================================
@@ -119,96 +140,73 @@ export class SettlementService {
     this.config = config;
   }
 
-  /**
-   * Access to the underlying HandleService for handle resolution.
-   */
   get handles(): HandleService {
     return this.handleService;
   }
 
+  // ==========================================================================
+  // x402 Settlement (non-custodial, via WazabiSettlement contract)
+  // ==========================================================================
+
   /**
-   * Execute a payment settlement with 0.5% fee
+   * Settle an x402 payment on-chain via the WazabiSettlement contract.
    *
-   * Accepts both registered handles and raw wallet addresses as sender/recipient.
-   * Registration is optional -- unregistered addresses are treated as pass-through.
-   *
-   * The treasury wallet executes an ERC-20 transfer of the net amount to the
-   * recipient. The 0.5% fee is retained in the treasury.
+   * Routes to the appropriate settlement path based on the payment scheme:
+   *   - permit2 → WazabiSettlement.settle()
+   *   - erc3009 → WazabiSettlement.settleWithAuthorization()
    */
-  async settle(request: SettleRequest): Promise<SettleResponse> {
-    const { from, to, amount, token, network } = request;
+  async settleX402(payload: PaymentPayload): Promise<PaymentResponse> {
+    const { network } = payload;
 
-    // Resolve sender: try registered agent first, fall back to raw address
-    let fromIdentifier: string;
-    let senderAgent: Agent | null = null;
+    const publicClient = this.config.publicClients[network];
+    const walletClient = this.config.walletClients[network];
+    const settlementAddress = this.config.settlementAddresses[network];
 
-    if (isAddress(from)) {
-      // Raw address -- check if registered, but don't require it
-      senderAgent = await this.store.getAgentByWallet(from);
-      fromIdentifier = senderAgent?.full_handle ?? from;
-    } else {
-      // Handle -- must be registered
-      senderAgent = await this.store.getAgentByHandle(from);
-      if (!senderAgent) {
-        throw new SettlementError(
-          `Handle "${from}" not found. Use a raw wallet address or register first at POST /register.`,
-          'HANDLE_NOT_FOUND'
-        );
-      }
-      fromIdentifier = senderAgent.full_handle;
-    }
-
-    // Resolve recipient: try registered agent first, fall back to raw address
-    let toAddress: string;
-    let toIdentifier: string;
-    if (isAddress(to)) {
-      const recipient = await this.store.getAgentByWallet(to);
-      toAddress = to;
-      toIdentifier = recipient?.full_handle ?? to;
-    } else {
-      const recipient = await this.store.getAgentByHandle(to);
-      if (!recipient) {
-        throw new SettlementError(
-          `Recipient handle "${to}" not found. Use a raw wallet address or register the handle first.`,
-          'HANDLE_NOT_FOUND'
-        );
-      }
-      toAddress = recipient.wallet_address;
-      toIdentifier = recipient.full_handle;
-    }
-
-    // Calculate fees
-    const fee = calculateFee(amount);
-    // Estimate gas cost dynamically using on-chain data
-    const estimatedGas = await this.estimateGasCost(network, token);
-
-    // Check for one-time wallet deployment fee (charged on first settlement)
-    const deploymentFee = (senderAgent?.pending_deployment_fee &&
-      parseFloat(senderAgent.pending_deployment_fee) > 0)
-      ? senderAgent.pending_deployment_fee
-      : '0';
-
-    // Total gas includes transfer gas + any pending deployment fee
-    const totalEstimatedGas = (parseFloat(estimatedGas) + parseFloat(deploymentFee)).toFixed(2);
-    const net = calculateNet(amount, fee, totalEstimatedGas);
-
-    if (parseFloat(net) <= 0) {
+    if (!publicClient || !walletClient) {
       throw new SettlementError(
-        `Amount too small. After fee ($${fee}) and gas ($${totalEstimatedGas}), net would be $${net}.`,
-        'AMOUNT_TOO_SMALL'
+        `No clients configured for network "${network}".`,
+        'NETWORK_NOT_CONFIGURED'
+      );
+    }
+
+    if (!settlementAddress) {
+      throw new SettlementError(
+        `No WazabiSettlement contract configured for network "${network}".`,
+        'SETTLEMENT_NOT_CONFIGURED'
+      );
+    }
+
+    if (!walletClient.account) {
+      throw new SettlementError(
+        `Wallet client for network "${network}" has no account configured.`,
+        'WALLET_NOT_CONFIGURED'
       );
     }
 
     // Create transaction record
+    const settlementId = randomUUID();
+    const payer = payload.payer;
+    const recipient = payload.scheme === 'permit2'
+      ? payload.witness.recipient
+      : payload.recipient;
+
+    const grossAmount = payload.scheme === 'permit2'
+      ? (BigInt(payload.permit.permitted[0]!.amount) + BigInt(payload.permit.permitted[1]!.amount)).toString()
+      : payload.authorization.value;
+
+    const token = payload.scheme === 'permit2'
+      ? payload.permit.permitted[0]!.token
+      : 'USDC';
+
     const transaction: Transaction = {
-      id: randomUUID(),
-      from_handle: fromIdentifier,
-      to_address: toAddress,
-      amount,
+      id: settlementId,
+      from_handle: payer,
+      to_address: recipient,
+      amount: grossAmount,
       token,
       network,
-      fee,
-      gas_cost: totalEstimatedGas,
+      fee: '0',
+      gas_cost: '0',
       tx_hash: null,
       status: 'pending',
       created_at: new Date(),
@@ -216,274 +214,56 @@ export class SettlementService {
 
     await this.store.createTransaction(transaction);
 
-    // Resolve clients for the target network
-    const publicClient = this.config.publicClients[network];
-    const walletClient = this.config.walletClients[network];
-
-    if (!publicClient || !walletClient) {
-      await this.store.updateTransactionStatus(transaction.id, 'failed');
-      throw new SettlementError(
-        `No clients configured for network "${network}". ` +
-        'Ensure PUBLIC_CLIENT and WALLET_CLIENT are available for this chain.',
-        'NETWORK_NOT_CONFIGURED'
-      );
-    }
-
-    const result = await this.executeLiveSettlement({
-      transaction,
-      publicClient,
-      walletClient,
-      treasuryAddress: this.config.treasuryAddress,
-      toAddress,
-      toIdentifier,
-      fromIdentifier,
-      amount,
-      token,
-      network,
-      fee,
-      deploymentFee,
-      net,
-    });
-
-    // Clear pending deployment fee after successful settlement
-    if (senderAgent && parseFloat(deploymentFee) > 0) {
-      await this.store.updateAgent(senderAgent.id, { pending_deployment_fee: '0' });
-    }
-
-    return result;
-  }
-
-  // ------------------------------------------------------------------
-  // Dynamic Gas Cost Estimation
-  // ------------------------------------------------------------------
-
-  /**
-   * Estimate gas cost for an ERC-20 transfer in USD-equivalent token units.
-   *
-   * Uses on-chain gas price data and a conservative gas limit for ERC-20
-   * transfers (~65,000 gas). The result is converted to a USD-equivalent
-   * amount using fixed native-token price assumptions per chain.
-   *
-   * Falls back to a conservative $0.02 estimate if the RPC call fails.
-   */
-  private async estimateGasCost(network: string, _token: string): Promise<string> {
-    const FALLBACK_GAS_COST = '0.02';
-    const ERC20_TRANSFER_GAS = 65_000n;
-
-    const publicClient = this.config.publicClients[network];
-    if (!publicClient) {
-      return FALLBACK_GAS_COST;
-    }
-
     try {
-      const gasPrice = await publicClient.getGasPrice();
-      // gasCostWei = gasPrice * gasLimit
-      const gasCostWei = gasPrice * ERC20_TRANSFER_GAS;
+      let txHash: `0x${string}`;
 
-      // Convert native token cost to approximate USD using conservative price estimates.
-      // These are floor estimates -- overestimating slightly is safer than underestimating.
-      const nativeUsdPrice = this.getNativeTokenUsdPrice(network);
-      const gasCostUsd = Number(gasCostWei) / 1e18 * nativeUsdPrice;
-
-      // Floor at $0.001 to avoid rounding to zero on cheap chains
-      const rounded = Math.max(gasCostUsd, 0.001);
-      return rounded < 0.01 ? rounded.toFixed(6) : rounded.toFixed(2);
-    } catch {
-      return FALLBACK_GAS_COST;
-    }
-  }
-
-  /**
-   * Conservative native token USD prices per chain.
-   * These are intentionally pessimistic (high) to prevent undercharging for gas.
-   * In production, integrate a price oracle (Chainlink, Coingecko, etc.).
-   */
-  private getNativeTokenUsdPrice(network: string): number {
-    switch (network) {
-      case 'eip155:1':    return 4000;  // ETH ~$4000 (high estimate)
-      case 'eip155:56':   return 700;   // BNB ~$700 (high estimate)
-      case 'eip155:8453': return 4000;  // Base uses ETH
-      default:            return 4000;
-    }
-  }
-
-  /**
-   * Calculate actual gas cost in USD from a confirmed transaction receipt.
-   * Uses gasUsed * effectiveGasPrice from the receipt for exact cost.
-   */
-  private calculateActualGasCost(
-    gasUsed: bigint,
-    effectiveGasPrice: bigint,
-    network: string
-  ): string {
-    const gasCostWei = gasUsed * effectiveGasPrice;
-    const nativeUsdPrice = this.getNativeTokenUsdPrice(network);
-    const gasCostUsd = Number(gasCostWei) / 1e18 * nativeUsdPrice;
-
-    const rounded = Math.max(gasCostUsd, 0.001);
-    return rounded < 0.01 ? rounded.toFixed(6) : rounded.toFixed(2);
-  }
-
-  // ------------------------------------------------------------------
-  // Live on-chain settlement
-  // ------------------------------------------------------------------
-
-  private async executeLiveSettlement(params: {
-    transaction: Transaction;
-    publicClient: PublicClient;
-    walletClient: WalletClient;
-    treasuryAddress: `0x${string}`;
-    toAddress: string;
-    toIdentifier: string;
-    fromIdentifier: string;
-    amount: string;
-    token: string;
-    network: string;
-    fee: string;
-    deploymentFee: string;
-    net: string;
-  }): Promise<SettleResponse> {
-    const {
-      transaction,
-      publicClient,
-      walletClient,
-      treasuryAddress,
-      toAddress,
-      toIdentifier,
-      fromIdentifier,
-      amount,
-      token,
-      network,
-      fee,
-      deploymentFee,
-      net,
-    } = params;
-
-    // 1. Resolve token address from chain config
-    const tokenConfig = getTokenForNetwork(network, token);
-    if (!tokenConfig) {
-      await this.store.updateTransactionStatus(transaction.id, 'failed');
-      throw new SettlementError(
-        `Token "${token}" is not supported on network "${network}".`,
-        'UNSUPPORTED_TOKEN'
-      );
-    }
-
-    const tokenAddress = tokenConfig.address;
-    const decimals = tokenConfig.decimals;
-
-    // 2. Convert net amount to on-chain units (smallest token unit)
-    const netAmountUnits = parseAmountToUnits(net, decimals);
-
-    // 3. Validate wallet client has an account configured
-    if (!walletClient.account) {
-      await this.store.updateTransactionStatus(transaction.id, 'failed');
-      throw new SettlementError(
-        `Wallet client for network "${network}" has no account configured. ` +
-        'Ensure the wallet client was created with a private key account.',
-        'WALLET_NOT_CONFIGURED'
-      );
-    }
-
-    try {
-      // 4. Check treasury balance before attempting transfer
-      const treasuryBalance = await publicClient.readContract({
-        address: tokenAddress,
-        abi: erc20Abi,
-        functionName: 'balanceOf',
-        args: [treasuryAddress],
-      });
-
-      if (treasuryBalance < netAmountUnits) {
-        await this.store.updateTransactionStatus(transaction.id, 'failed');
-        throw new SettlementError(
-          `Insufficient treasury balance for ${token} on ${network}. ` +
-          `Required: ${net} ${token} (${netAmountUnits.toString()} units), ` +
-          `available: ${treasuryBalance.toString()} units.`,
-          'INSUFFICIENT_BALANCE'
+      if (payload.scheme === 'permit2') {
+        txHash = await this.executePermit2Settlement(
+          payload,
+          settlementAddress,
+          walletClient
+        );
+      } else {
+        txHash = await this.executeERC3009Settlement(
+          payload,
+          settlementAddress,
+          walletClient
         );
       }
 
-      // 5. Execute ERC-20 transfer: treasury -> recipient for the net amount.
-      //    The 0.5% fee stays in the treasury automatically since the payer
-      //    sent the full gross amount to the treasury via the x402 payment.
-      // The walletClient is created with account + chain in config.ts,
-      // so both are guaranteed to be set here. The non-null assertions are
-      // safe because we already checked walletClient.account above.
-      const txHash = await walletClient.writeContract({
-        address: tokenAddress,
-        abi: erc20Abi,
-        functionName: 'transfer',
-        args: [toAddress as `0x${string}`, netAmountUnits],
-        account: walletClient.account!,
-        chain: walletClient.chain!,
-      });
+      // Mark as submitted
+      await this.store.updateTransactionStatus(settlementId, 'submitted', txHash);
 
-      // 6. Mark as submitted (transaction broadcast to network)
-      await this.store.updateTransactionStatus(
-        transaction.id,
-        'submitted',
-        txHash
-      );
-
-      // 7. Wait for transaction to be mined
-      const receipt = await publicClient.waitForTransactionReceipt({
-        hash: txHash,
-      });
+      // Wait for confirmation
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
 
       if (receipt.status === 'success') {
-        // 8a. Confirmed -- calculate actual gas cost from receipt and update record.
-        //     Include any one-time wallet deployment fee in the total gas charge.
-        const transferGas = this.calculateActualGasCost(
-          receipt.gasUsed,
-          receipt.effectiveGasPrice,
-          network
-        );
-        const deployFeeNum = parseFloat(deploymentFee) || 0;
-        const totalGas = parseFloat(transferGas) + deployFeeNum;
-        const totalGasStr = totalGas < 0.01 ? totalGas.toFixed(6) : totalGas.toFixed(2);
-        const actualNet = calculateNet(amount, fee, totalGasStr);
+        const gasCostWei = receipt.gasUsed * receipt.effectiveGasPrice;
+        const nativeUsdPrice = this.getNativeTokenUsdPrice(network);
+        const gasCostUsd = Number(gasCostWei) / 1e18 * nativeUsdPrice;
+        const gasStr = gasCostUsd < 0.01 ? gasCostUsd.toFixed(6) : gasCostUsd.toFixed(2);
 
-        // Update transaction record with actual total gas cost
-        await this.store.updateTransactionGas(transaction.id, totalGasStr);
-        await this.store.updateTransactionStatus(
-          transaction.id,
-          'confirmed',
-          txHash
-        );
+        await this.store.updateTransactionGas(settlementId, gasStr);
+        await this.store.updateTransactionStatus(settlementId, 'confirmed', txHash);
 
         return {
           success: true,
-          tx_hash: txHash,
-          settlement: {
-            gross: amount,
-            fee,
-            gas: totalGasStr,
-            net: actualNet,
-          },
-          from: fromIdentifier,
-          to: toIdentifier,
+          txHash,
           network,
+          settlementId,
         };
       } else {
-        // 8b. Transaction was mined but reverted
-        await this.store.updateTransactionStatus(
-          transaction.id,
-          'failed',
-          txHash
-        );
+        await this.store.updateTransactionStatus(settlementId, 'failed', txHash);
         throw new SettlementError(
           `Transaction reverted on-chain. Tx hash: ${txHash}`,
           'TX_REVERTED'
         );
       }
     } catch (err) {
-      // Re-throw SettlementErrors as-is (they already updated the record)
       if (err instanceof SettlementError) throw err;
 
-      // Unexpected errors (RPC timeout, gas estimation failure, nonce issues, etc.)
       const errorMessage = err instanceof Error ? err.message : String(err);
-      await this.store.updateTransactionStatus(transaction.id, 'failed');
+      await this.store.updateTransactionStatus(settlementId, 'failed');
       throw new SettlementError(
         `On-chain settlement failed: ${errorMessage}`,
         'SETTLEMENT_FAILED'
@@ -492,11 +272,106 @@ export class SettlementService {
   }
 
   /**
-   * Verify a payment (x402 standard verification + optional balance check)
-   *
-   * Works with both registered handles and raw addresses.
-   * For registered agents, also checks on-chain balance sufficiency.
-   * For raw addresses, verifies the address format and returns valid.
+   * Execute Permit2 settlement via WazabiSettlement.settle()
+   */
+  private async executePermit2Settlement(
+    payload: Permit2Payload,
+    settlementAddress: `0x${string}`,
+    walletClient: WalletClient
+  ): Promise<`0x${string}`> {
+    const permit = {
+      permitted: payload.permit.permitted.map(p => ({
+        token: p.token as `0x${string}`,
+        amount: BigInt(p.amount),
+      })),
+      nonce: BigInt(payload.permit.nonce),
+      deadline: BigInt(payload.permit.deadline),
+    };
+
+    const witness = {
+      recipient: payload.witness.recipient as `0x${string}`,
+      feeBps: BigInt(payload.witness.feeBps),
+    };
+
+    return walletClient.writeContract({
+      address: settlementAddress,
+      abi: wazabiSettlementAbi,
+      functionName: 'settle',
+      args: [permit, payload.payer as `0x${string}`, witness, payload.signature as `0x${string}`],
+      account: walletClient.account!,
+      chain: walletClient.chain!,
+    });
+  }
+
+  /**
+   * Execute ERC-3009 settlement via WazabiSettlement.settleWithAuthorization()
+   */
+  private async executeERC3009Settlement(
+    payload: ERC3009Payload,
+    settlementAddress: `0x${string}`,
+    walletClient: WalletClient
+  ): Promise<`0x${string}`> {
+    const { v, r, s } = splitSignature(payload.signature);
+    const tokenAddress = this.resolveERC3009Token(payload.network);
+
+    return walletClient.writeContract({
+      address: settlementAddress,
+      abi: wazabiSettlementAbi,
+      functionName: 'settleWithAuthorization',
+      args: [
+        tokenAddress,
+        payload.payer as `0x${string}`,
+        payload.recipient as `0x${string}`,
+        BigInt(payload.authorization.value),
+        BigInt(payload.authorization.validAfter),
+        BigInt(payload.authorization.validBefore),
+        payload.authorization.nonce as `0x${string}`,
+        v,
+        r,
+        s,
+      ],
+      account: walletClient.account!,
+      chain: walletClient.chain!,
+    });
+  }
+
+  /**
+   * Resolve ERC-3009 token address for a network (USDC only)
+   */
+  private resolveERC3009Token(network: string): `0x${string}` {
+    const usdcAddresses: Record<string, `0x${string}`> = {
+      'eip155:1': '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+      'eip155:8453': '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+    };
+
+    const addr = usdcAddresses[network];
+    if (!addr) {
+      throw new SettlementError(
+        `ERC-3009 not supported on network "${network}". Only Ethereum and Base USDC.`,
+        'ERC3009_NOT_SUPPORTED'
+      );
+    }
+    return addr;
+  }
+
+  /**
+   * Conservative native token USD prices per chain.
+   */
+  private getNativeTokenUsdPrice(network: string): number {
+    switch (network) {
+      case 'eip155:1':    return 4000;
+      case 'eip155:56':   return 700;
+      case 'eip155:8453': return 4000;
+      default:            return 4000;
+    }
+  }
+
+  // ==========================================================================
+  // Identity Layer (handle-based lookups, history, etc.)
+  // ==========================================================================
+
+  /**
+   * Verify a payment (identity-based check + optional balance check)
    */
   async verifyPayment(params: {
     from: string;
@@ -513,10 +388,8 @@ export class SettlementService {
     const { from, amount, token, network } = params;
 
     if (isAddress(from)) {
-      // Raw address -- valid without registration
       const sender = await this.store.getAgentByWallet(from);
       if (sender) {
-        // Registered agent -- include balance check
         const balances = await this.store.getBalances(sender.id);
         const tokenBalance = balances.find(
           b => b.network === network && b.token === token
@@ -530,7 +403,6 @@ export class SettlementService {
           balanceSufficient: balance >= required,
         };
       }
-      // Unregistered address -- valid, no balance info available
       return {
         valid: true,
         signer: from,
@@ -538,7 +410,6 @@ export class SettlementService {
       };
     }
 
-    // Handle -- must be registered
     const sender = await this.store.getAgentByHandle(from);
     if (!sender) {
       return { valid: false, error: `Handle "${from}" not found` };
@@ -567,13 +438,11 @@ export class SettlementService {
     limit: number = 20,
     offset: number = 0
   ) {
-    // Try to resolve as handle first, then as address
     let agent = await this.store.getAgentByHandle(handleOrAddress);
     if (!agent && isAddress(handleOrAddress)) {
       agent = await this.store.getAgentByWallet(handleOrAddress);
     }
 
-    // For registered agents, return full history
     if (agent) {
       const identifier = agent.full_handle;
       const { transactions, total } = await this.store.getTransactionsByHandle(
@@ -598,15 +467,10 @@ export class SettlementService {
           network: tx.network,
           timestamp: tx.created_at.toISOString(),
         })),
-        pagination: {
-          limit,
-          offset,
-          total,
-        },
+        pagination: { limit, offset, total },
       };
     }
 
-    // For unregistered addresses, search by from_handle (stored as raw address)
     if (isAddress(handleOrAddress)) {
       const { transactions, total } = await this.store.getTransactionsByHandle(
         handleOrAddress,
@@ -630,11 +494,7 @@ export class SettlementService {
           network: tx.network,
           timestamp: tx.created_at.toISOString(),
         })),
-        pagination: {
-          limit,
-          offset,
-          total,
-        },
+        pagination: { limit, offset, total },
       };
     }
 

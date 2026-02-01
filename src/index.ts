@@ -55,7 +55,6 @@ export { X402Client, createX402Client, createX402ClientFromEnv } from './client/
 export {
   x402Middleware,
   createPaymentRequirement,
-  verifyPayment,
   parsePaymentFromRequest,
   type X402Request,
 } from './server/index.js';

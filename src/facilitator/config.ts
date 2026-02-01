@@ -12,6 +12,7 @@ export interface FacilitatorEnvConfig {
   entryPointAddress: `0x${string}`;
   accountFactoryAddresses: Record<string, `0x${string}`>;
   paymasterAddresses: Record<string, `0x${string}`>;
+  settlementAddresses: Record<string, `0x${string}`>;
 
   // RPC endpoints
   rpcUrls: Record<string, string>;
@@ -59,6 +60,12 @@ export function loadConfig(): FacilitatorEnvConfig {
       'eip155:1': requireEnv('PAYMASTER_ETH') as `0x${string}`,
       'eip155:56': requireEnv('PAYMASTER_BSC') as `0x${string}`,
       'eip155:8453': requireEnv('PAYMASTER_BASE') as `0x${string}`,
+    },
+
+    settlementAddresses: {
+      'eip155:1': (process.env['SETTLEMENT_ETH'] || '') as `0x${string}`,
+      'eip155:56': (process.env['SETTLEMENT_BSC'] || '') as `0x${string}`,
+      'eip155:8453': (process.env['SETTLEMENT_BASE'] || '') as `0x${string}`,
     },
 
     rpcUrls: {

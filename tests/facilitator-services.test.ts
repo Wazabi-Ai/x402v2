@@ -5,13 +5,27 @@ import { HandleService, HandleError } from '../src/facilitator/services/handle.j
 import { SettlementService, SettlementError } from '../src/facilitator/services/settlement.js';
 import type { SettlementConfig } from '../src/facilitator/services/settlement.js';
 import { WalletService } from '../src/facilitator/services/wallet.js';
+import type { Permit2Payload, ERC3009Payload } from '../src/types/index.js';
 
-// Mock viem clients for settlement tests
+// ============================================================================
+// Mock Constants
+// ============================================================================
+
 const MOCK_TREASURY = '0x1111111111111111111111111111111111111111' as `0x${string}`;
+const MOCK_SETTLEMENT_ADDR = '0x4444444444444444444444444444444444444444' as `0x${string}`;
+const MOCK_PAYER = '0x2222222222222222222222222222222222222222' as `0x${string}`;
+const MOCK_RECIPIENT = '0x3333333333333333333333333333333333333333' as `0x${string}`;
+const MOCK_TOKEN = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' as `0x${string}`;
+const MOCK_TX_HASH = ('0x' + 'ab'.repeat(32)) as `0x${string}`;
+const MOCK_SIGNATURE = ('0x' + 'cd'.repeat(65)) as `0x${string}`;
+
+// ============================================================================
+// Mock Viem Clients
+// ============================================================================
 
 const mockPublicClient = {
   readContract: async () => BigInt('1000000000000000000000'),
-  getGasPrice: async () => BigInt(76_923_077), // ~0.077 gwei → ~$0.02 gas on Base ($4000 ETH)
+  getGasPrice: async () => BigInt(76_923_077),
   waitForTransactionReceipt: async () => ({
     status: 'success' as const,
     gasUsed: BigInt(65_000),
@@ -20,15 +34,79 @@ const mockPublicClient = {
 } as unknown as PublicClient;
 
 const mockWalletClient = {
-  writeContract: async () => ('0x' + 'ab'.repeat(32)) as `0x${string}`,
+  writeContract: async () => MOCK_TX_HASH,
   account: { address: MOCK_TREASURY },
   chain: { id: 8453 },
 } as unknown as WalletClient;
 
 const mockSettlementConfig: SettlementConfig = {
   treasuryAddress: MOCK_TREASURY,
+  settlementAddresses: {
+    'eip155:8453': MOCK_SETTLEMENT_ADDR,
+    'eip155:56': MOCK_SETTLEMENT_ADDR,
+  },
   publicClients: { 'eip155:8453': mockPublicClient, 'eip155:56': mockPublicClient },
   walletClients: { 'eip155:8453': mockWalletClient, 'eip155:56': mockWalletClient },
+};
+
+// ============================================================================
+// Payload Builders
+// ============================================================================
+
+function buildPermit2Payload(overrides: Partial<Permit2Payload> = {}): Permit2Payload {
+  const deadline = Math.floor(Date.now() / 1000) + 300;
+  return {
+    scheme: 'permit2' as const,
+    network: 'eip155:8453',
+    permit: {
+      permitted: [
+        { token: MOCK_TOKEN, amount: '9950000' },  // net → recipient
+        { token: MOCK_TOKEN, amount: '50000' },     // fee → treasury
+      ],
+      nonce: '123456789',
+      deadline,
+    },
+    witness: {
+      recipient: MOCK_RECIPIENT,
+      feeBps: 50,
+    },
+    spender: MOCK_SETTLEMENT_ADDR,
+    payer: MOCK_PAYER,
+    signature: MOCK_SIGNATURE,
+    ...overrides,
+  };
+}
+
+function buildERC3009Payload(overrides: Partial<ERC3009Payload> = {}): ERC3009Payload {
+  return {
+    scheme: 'erc3009' as const,
+    network: 'eip155:8453',
+    authorization: {
+      from: MOCK_PAYER,
+      to: MOCK_SETTLEMENT_ADDR,
+      value: '10000000',
+      validAfter: 0,
+      validBefore: Math.floor(Date.now() / 1000) + 300,
+      nonce: ('0x' + 'ab'.repeat(32)) as `0x${string}`,
+    },
+    recipient: MOCK_RECIPIENT,
+    payer: MOCK_PAYER,
+    signature: MOCK_SIGNATURE,
+    ...overrides,
+  };
+}
+
+// ============================================================================
+// WalletService Configuration
+// ============================================================================
+
+const TEST_FACTORY_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as `0x${string}`;
+const testWalletConfig = {
+  accountFactoryAddresses: {
+    'eip155:1': TEST_FACTORY_ADDRESS,
+    'eip155:56': TEST_FACTORY_ADDRESS,
+    'eip155:8453': TEST_FACTORY_ADDRESS,
+  },
 };
 
 // ============================================================================
@@ -268,15 +346,6 @@ describe('InMemoryStore', () => {
 // WalletService Tests
 // ============================================================================
 
-const TEST_FACTORY_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as `0x${string}`;
-const testWalletConfig = {
-  accountFactoryAddresses: {
-    'eip155:1': TEST_FACTORY_ADDRESS,
-    'eip155:56': TEST_FACTORY_ADDRESS,
-    'eip155:8453': TEST_FACTORY_ADDRESS,
-  },
-};
-
 describe('WalletService', () => {
   let walletService: WalletService;
 
@@ -512,7 +581,7 @@ describe('SettlementService', () => {
     handleService = new HandleService(store, new WalletService(testWalletConfig));
     settlementService = new SettlementService(handleService, store, mockSettlementConfig);
 
-    // Register two agents for testing
+    // Register two agents for identity-layer tests
     await handleService.register({
       handle: 'molty',
       networks: ['eip155:8453'],
@@ -523,152 +592,209 @@ describe('SettlementService', () => {
     });
   });
 
-  describe('settle', () => {
-    it('should execute a settlement between handles', async () => {
-      const result = await settlementService.settle({
-        from: 'molty',
-        to: 'agent-b',
-        amount: '10.00',
-        token: 'USDC',
-        network: 'eip155:8453',
-      });
+  // ==========================================================================
+  // settleX402 — Permit2 path
+  // ==========================================================================
+
+  describe('settleX402 (Permit2)', () => {
+    it('should execute Permit2 settlement successfully', async () => {
+      const payload = buildPermit2Payload();
+      const result = await settlementService.settleX402(payload);
 
       expect(result.success).toBe(true);
-      expect(result.tx_hash).toBeDefined();
-      expect(result.from).toBe('molty.wazabi-x402');
-      expect(result.settlement.gross).toBe('10.00');
-      expect(result.settlement.fee).toBe('0.05');
-      expect(parseFloat(result.settlement.net)).toBeCloseTo(9.93, 2);
+      expect(result.txHash).toBe(MOCK_TX_HASH);
+      expect(result.network).toBe('eip155:8453');
+      expect(result.settlementId).toBeDefined();
     });
 
-    it('should apply 0.5% fee', async () => {
-      const result = await settlementService.settle({
-        from: 'molty',
-        to: 'agent-b',
-        amount: '100.00',
-        token: 'USDC',
-        network: 'eip155:8453',
-      });
+    it('should record transaction in store on success', async () => {
+      const payload = buildPermit2Payload();
+      const result = await settlementService.settleX402(payload);
 
-      expect(result.settlement.fee).toBe('0.50');
+      const { transactions } = await store.getTransactionsByHandle(MOCK_PAYER);
+      expect(transactions).toHaveLength(1);
+      expect(transactions[0]?.status).toBe('confirmed');
+      expect(transactions[0]?.tx_hash).toBe(MOCK_TX_HASH);
+      expect(transactions[0]?.to_address).toBe(MOCK_RECIPIENT);
     });
 
-    it('should reject unknown sender handle', async () => {
-      await expect(
-        settlementService.settle({
-          from: 'unknown-agent',
-          to: 'agent-b',
-          amount: '10.00',
-          token: 'USDC',
-          network: 'eip155:8453',
-        })
-      ).rejects.toThrow('not found');
+    it('should compute gross amount from permitted[0] + permitted[1]', async () => {
+      const payload = buildPermit2Payload();
+      await settlementService.settleX402(payload);
+
+      const { transactions } = await store.getTransactionsByHandle(MOCK_PAYER);
+      // 9950000 + 50000 = 10000000
+      expect(transactions[0]?.amount).toBe('10000000');
     });
 
-    it('should reject unknown recipient handle', async () => {
-      await expect(
-        settlementService.settle({
-          from: 'molty',
-          to: 'unknown-agent',
-          amount: '10.00',
-          token: 'USDC',
-          network: 'eip155:8453',
-        })
-      ).rejects.toThrow('not found');
+    it('should reject unsupported network', async () => {
+      const payload = buildPermit2Payload({ network: 'eip155:999' });
+      await expect(settlementService.settleX402(payload)).rejects.toThrow('No clients configured');
     });
 
-    it('should accept recipient as address', async () => {
-      const result = await settlementService.settle({
-        from: 'molty',
-        to: '0x1234567890abcdef1234567890abcdef12345678',
-        amount: '10.00',
-        token: 'USDC',
-        network: 'eip155:8453',
-      });
+    it('should handle reverted transaction', async () => {
+      const failingPublicClient = {
+        ...mockPublicClient,
+        waitForTransactionReceipt: async () => ({
+          status: 'reverted' as const,
+          gasUsed: BigInt(65_000),
+          effectiveGasPrice: BigInt(76_923_077),
+        }),
+      } as unknown as PublicClient;
 
-      expect(result.success).toBe(true);
-      expect(result.to).toBe('0x1234567890abcdef1234567890abcdef12345678');
+      const failConfig: SettlementConfig = {
+        ...mockSettlementConfig,
+        publicClients: { ...mockSettlementConfig.publicClients, 'eip155:8453': failingPublicClient },
+      };
+
+      const failService = new SettlementService(handleService, store, failConfig);
+      const payload = buildPermit2Payload();
+
+      await expect(failService.settleX402(payload)).rejects.toThrow('reverted');
     });
 
-    it('should accept unregistered sender address (no registration required)', async () => {
-      const rawAddress = '0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
-      const result = await settlementService.settle({
-        from: rawAddress,
-        to: 'agent-b',
-        amount: '25.00',
-        token: 'USDC',
-        network: 'eip155:8453',
-      });
+    it('should handle writeContract failure', async () => {
+      const failingWalletClient = {
+        writeContract: async () => { throw new Error('execution reverted'); },
+        account: { address: MOCK_TREASURY },
+        chain: { id: 8453 },
+      } as unknown as WalletClient;
 
-      expect(result.success).toBe(true);
-      expect(result.from).toBe(rawAddress); // Raw address used as identifier
-      expect(result.settlement.fee).toBe('0.13'); // 0.5% of 25
+      const failConfig: SettlementConfig = {
+        ...mockSettlementConfig,
+        walletClients: { ...mockSettlementConfig.walletClients, 'eip155:8453': failingWalletClient },
+      };
+
+      const failService = new SettlementService(handleService, store, failConfig);
+      const payload = buildPermit2Payload();
+
+      await expect(failService.settleX402(payload)).rejects.toThrow('settlement failed');
     });
 
-    it('should settle between two raw addresses (fully unregistered)', async () => {
-      const sender = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-      const recipient = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
-      const result = await settlementService.settle({
-        from: sender,
-        to: recipient,
-        amount: '50.00',
-        token: 'USDC',
-        network: 'eip155:56',
-      });
+    it('should mark transaction as failed on error', async () => {
+      const failingWalletClient = {
+        writeContract: async () => { throw new Error('RPC error'); },
+        account: { address: MOCK_TREASURY },
+        chain: { id: 8453 },
+      } as unknown as WalletClient;
 
-      expect(result.success).toBe(true);
-      expect(result.from).toBe(sender);
-      expect(result.to).toBe(recipient);
-      expect(result.settlement.fee).toBe('0.25');
-    });
+      const failConfig: SettlementConfig = {
+        ...mockSettlementConfig,
+        walletClients: { ...mockSettlementConfig.walletClients, 'eip155:8453': failingWalletClient },
+      };
 
-    it('should resolve registered address to handle in response', async () => {
-      // Get molty's wallet address
-      const resolved = await handleService.resolve('molty');
-      const moltyAddress = resolved!.address;
+      const failService = new SettlementService(handleService, store, failConfig);
+      const payload = buildPermit2Payload();
 
-      const result = await settlementService.settle({
-        from: moltyAddress,
-        to: 'agent-b',
-        amount: '10.00',
-        token: 'USDC',
-        network: 'eip155:8453',
-      });
+      try { await failService.settleX402(payload); } catch { /* expected */ }
 
-      expect(result.success).toBe(true);
-      // When using a registered address, response should show the handle
-      expect(result.from).toBe('molty.wazabi-x402');
-    });
-
-    it('should record transaction in store', async () => {
-      await settlementService.settle({
-        from: 'molty',
-        to: 'agent-b',
-        amount: '10.00',
-        token: 'USDC',
-        network: 'eip155:8453',
-      });
-
-      const { total } = await store.getTransactionsByHandle('molty');
-      expect(total).toBe(1);
+      const { transactions } = await store.getTransactionsByHandle(MOCK_PAYER);
+      expect(transactions[0]?.status).toBe('failed');
     });
   });
 
+  // ==========================================================================
+  // settleX402 — ERC-3009 path
+  // ==========================================================================
+
+  describe('settleX402 (ERC-3009)', () => {
+    it('should execute ERC-3009 settlement successfully', async () => {
+      const payload = buildERC3009Payload();
+      const result = await settlementService.settleX402(payload);
+
+      expect(result.success).toBe(true);
+      expect(result.txHash).toBe(MOCK_TX_HASH);
+      expect(result.network).toBe('eip155:8453');
+      expect(result.settlementId).toBeDefined();
+    });
+
+    it('should record transaction with authorization value as amount', async () => {
+      const payload = buildERC3009Payload();
+      await settlementService.settleX402(payload);
+
+      const { transactions } = await store.getTransactionsByHandle(MOCK_PAYER);
+      expect(transactions).toHaveLength(1);
+      expect(transactions[0]?.amount).toBe('10000000');
+      expect(transactions[0]?.to_address).toBe(MOCK_RECIPIENT);
+    });
+
+    it('should reject ERC-3009 on unsupported network (BSC)', async () => {
+      const payload = buildERC3009Payload({ network: 'eip155:56' });
+      await expect(settlementService.settleX402(payload)).rejects.toThrow('not supported');
+    });
+  });
+
+  // ==========================================================================
+  // settleX402 — Configuration errors
+  // ==========================================================================
+
+  describe('settleX402 (configuration)', () => {
+    it('should reject when no settlement address configured', async () => {
+      const noSettlementConfig: SettlementConfig = {
+        ...mockSettlementConfig,
+        settlementAddresses: {},
+      };
+      const service = new SettlementService(handleService, store, noSettlementConfig);
+      const payload = buildPermit2Payload();
+
+      await expect(service.settleX402(payload)).rejects.toThrow('No WazabiSettlement contract configured');
+    });
+
+    it('should reject when wallet client has no account', async () => {
+      const noAccountClient = {
+        writeContract: async () => MOCK_TX_HASH,
+        account: undefined,
+        chain: { id: 8453 },
+      } as unknown as WalletClient;
+
+      const noAccountConfig: SettlementConfig = {
+        ...mockSettlementConfig,
+        walletClients: { ...mockSettlementConfig.walletClients, 'eip155:8453': noAccountClient },
+      };
+
+      const service = new SettlementService(handleService, store, noAccountConfig);
+      const payload = buildPermit2Payload();
+
+      await expect(service.settleX402(payload)).rejects.toThrow('no account');
+    });
+  });
+
+  // ==========================================================================
+  // getHistory — Handle-based and address-based lookups
+  // ==========================================================================
+
   describe('getHistory', () => {
-    it('should return transaction history', async () => {
-      await settlementService.settle({
-        from: 'molty',
-        to: 'agent-b',
-        amount: '10.00',
-        token: 'USDC',
+    it('should return transaction history for registered handle', async () => {
+      await store.createTransaction({
+        id: 'tx-1',
+        from_handle: 'molty.wazabi-x402',
+        to_address: MOCK_RECIPIENT,
+        amount: '10000000',
+        token: MOCK_TOKEN,
         network: 'eip155:8453',
+        fee: '0',
+        gas_cost: '0',
+        tx_hash: MOCK_TX_HASH,
+        status: 'confirmed',
+        created_at: new Date(),
       });
 
       const history = await settlementService.getHistory('molty');
       expect(history.handle).toBe('molty.wazabi-x402');
       expect(history.transactions).toHaveLength(1);
       expect(history.transactions[0]?.type).toBe('payment_sent');
-      expect(history.transactions[0]?.amount).toBe('10.00');
+      expect(history.transactions[0]?.amount).toBe('10000000');
+    });
+
+    it('should return history after x402 settlement (address lookup)', async () => {
+      const payload = buildPermit2Payload();
+      await settlementService.settleX402(payload);
+
+      // settleX402 stores payer address as from_handle
+      const history = await settlementService.getHistory(MOCK_PAYER);
+      expect(history.address).toBe(MOCK_PAYER);
+      expect(history.transactions).toHaveLength(1);
+      expect(history.transactions[0]?.type).toBe('payment_sent');
     });
 
     it('should throw for unknown non-address string', async () => {
@@ -684,31 +810,20 @@ describe('SettlementService', () => {
       expect(history.transactions).toHaveLength(0);
     });
 
-    it('should return history for unregistered address after settlement', async () => {
-      const addr = '0xdddddddddddddddddddddddddddddddddddddddd';
-      await settlementService.settle({
-        from: addr,
-        to: 'agent-b',
-        amount: '15.00',
-        token: 'USDC',
-        network: 'eip155:8453',
-      });
-
-      const history = await settlementService.getHistory(addr);
-      expect(history.address).toBe(addr);
-      expect(history.transactions).toHaveLength(1);
-      expect(history.transactions[0]?.type).toBe('payment_sent');
-    });
-
     it('should support pagination', async () => {
-      // Make 3 transactions
       for (let i = 0; i < 3; i++) {
-        await settlementService.settle({
-          from: 'molty',
-          to: 'agent-b',
-          amount: `${i + 1}.00`,
-          token: 'USDC',
+        await store.createTransaction({
+          id: `tx-${i}`,
+          from_handle: 'molty.wazabi-x402',
+          to_address: MOCK_RECIPIENT,
+          amount: `${(i + 1) * 1000000}`,
+          token: MOCK_TOKEN,
           network: 'eip155:8453',
+          fee: '0',
+          gas_cost: '0',
+          tx_hash: null,
+          status: 'confirmed',
+          created_at: new Date(Date.now() + i * 1000),
         });
       }
 
@@ -718,6 +833,10 @@ describe('SettlementService', () => {
       expect(history.pagination.limit).toBe(2);
     });
   });
+
+  // ==========================================================================
+  // verifyPayment — Identity-layer verification
+  // ==========================================================================
 
   describe('verifyPayment', () => {
     it('should verify a registered sender by handle', async () => {
@@ -756,7 +875,6 @@ describe('SettlementService', () => {
       expect(result.valid).toBe(true);
       expect(result.registered).toBe(false);
       expect(result.signer).toBe('0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee');
-      // No balance info for unregistered addresses
       expect(result.balanceSufficient).toBeUndefined();
     });
 
@@ -774,6 +892,10 @@ describe('SettlementService', () => {
       expect(result.balanceSufficient).toBeDefined();
     });
   });
+
+  // ==========================================================================
+  // getFeeSchedule
+  // ==========================================================================
 
   describe('getFeeSchedule', () => {
     it('should return fee schedule', () => {

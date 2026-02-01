@@ -26,7 +26,6 @@ import { SettlementService, SettlementError } from './services/settlement.js';
 import { WalletService } from './services/wallet.js';
 import {
   RegisterRequestSchema,
-  SettleRequestSchema,
   VerifyRequestSchema,
   HANDLE_SUFFIX,
   SETTLEMENT_FEE_RATE,
@@ -40,6 +39,7 @@ import type {
   ProfileResponse,
 } from './types.js';
 import { SUPPORTED_NETWORKS, getSupportedNetworkIds } from '../chains/index.js';
+import { PaymentPayloadSchema } from '../types/index.js';
 import type { PublicClient, WalletClient } from 'viem';
 
 // ============================================================================
@@ -59,6 +59,8 @@ export interface FacilitatorConfig {
   portalDir?: string;
   /** Treasury wallet address for fee collection (required) */
   treasuryAddress: `0x${string}`;
+  /** WazabiSettlement contract addresses keyed by CAIP-2 network ID */
+  settlementAddresses?: Record<string, `0x${string}`>;
   /** Public clients for on-chain reads, keyed by CAIP-2 network ID (required) */
   publicClients: Record<string, PublicClient>;
   /** Wallet clients for on-chain writes, keyed by CAIP-2 network ID (required) */
@@ -93,6 +95,7 @@ export function createFacilitator(
 
   const settlementService = new SettlementService(handleService, store, {
     treasuryAddress: config.treasuryAddress,
+    settlementAddresses: config.settlementAddresses ?? {},
     publicClients: config.publicClients,
     walletClients: config.walletClients,
   });
@@ -124,7 +127,7 @@ export function createFacilitator(
         }
       }
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Payment-Signature, X-Payment-Payload');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Payment, X-Payment-Required, X-Payment-Response');
       res.setHeader('Access-Control-Max-Age', '86400');
       if (req.method === 'OPTIONS') {
         res.sendStatus(204);
@@ -442,12 +445,12 @@ export function createFacilitator(
   });
 
   // ========================================================================
-  // POST /settle — Execute payment + 0.5% fee
+  // POST /x402/settle — Non-custodial x402 settlement via WazabiSettlement
   // ========================================================================
 
-  app.post('/settle', async (req: Request, res: Response) => {
+  app.post('/x402/settle', async (req: Request, res: Response) => {
     try {
-      const parsed = SettleRequestSchema.safeParse(req.body);
+      const parsed = PaymentPayloadSchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(400).json({
           error: 'INVALID_REQUEST',
@@ -457,7 +460,7 @@ export function createFacilitator(
         return;
       }
 
-      const result = await settlementService.settle(parsed.data);
+      const result = await settlementService.settleX402(parsed.data);
       res.json(result);
     } catch (error) {
       if (error instanceof SettlementError) {
@@ -468,7 +471,7 @@ export function createFacilitator(
         });
         return;
       }
-      console.error('[facilitator] Settle error:', error);
+      console.error('[facilitator] x402 settle error:', error);
       res.status(500).json({
         error: 'INTERNAL_ERROR',
         message: 'Settlement failed',

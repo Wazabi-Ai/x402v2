@@ -1,45 +1,33 @@
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import axios from 'axios';
 import {
-  verifyTypedData,
   type Address,
 } from 'viem';
 
 import {
   type PaymentRequirement,
   type PaymentPayload,
-  type SignedPayment,
+  type PaymentResponse,
   type X402MiddlewareConfig,
-  type PaymentVerificationResult,
-  type FacilitatorVerifyRequest,
-  type FacilitatorVerifyResponse,
-  SignedPaymentSchema,
+  type PaymentScheme,
   PaymentPayloadSchema,
   X402_HEADERS,
-  X402_DOMAIN_NAME,
   X402_VERSION,
-  PAYMENT_TYPES,
-  generateNonce,
+  DEFAULT_FEE_BPS,
   calculateDeadline,
   extractChainId,
 } from '../types/index.js';
 import {
-  BSC_CAIP_ID,
-  BSC_USDT,
-} from '../chains/bnb.js';
+  BASE_CAIP_ID,
+  BASE_USDC,
+} from '../chains/base.js';
 
 // ============================================================================
 // Nonce Registry (replay protection)
 // ============================================================================
 
-/**
- * In-memory nonce registry that prevents replay attacks by tracking used
- * nonces. Entries are automatically evicted after `ttlMs` (default: 10 min).
- *
- * For production at scale, replace with a Redis SET + TTL.
- */
 class NonceRegistry {
-  private readonly used = new Map<string, number>(); // nonce -> expiry timestamp (ms)
+  private readonly used = new Map<string, number>();
   private readonly ttlMs: number;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -47,7 +35,6 @@ class NonceRegistry {
     this.ttlMs = ttlMs;
   }
 
-  /** Returns false if the nonce was already seen (replay). */
   claim(nonce: string): boolean {
     this.lazyStartSweep();
     if (this.used.has(nonce)) return false;
@@ -55,7 +42,6 @@ class NonceRegistry {
     return true;
   }
 
-  /** Lazily start the cleanup interval (avoids timer in tests that don't need it). */
   private lazyStartSweep() {
     if (this.sweepTimer) return;
     this.sweepTimer = setInterval(() => {
@@ -64,7 +50,6 @@ class NonceRegistry {
         if (expiry < now) this.used.delete(nonce);
       }
     }, 60_000);
-    // Allow Node.js to exit even if the timer is running
     if (this.sweepTimer && typeof this.sweepTimer === 'object' && 'unref' in this.sweepTimer) {
       this.sweepTimer.unref();
     }
@@ -77,147 +62,13 @@ const nonceRegistry = new NonceRegistry();
 // Types
 // ============================================================================
 
-/**
- * Extended Express Request with payment information
- */
 export interface X402Request extends Request {
   x402?: {
-    payment: SignedPayment;
+    payment: PaymentPayload;
     verified: boolean;
     signer: Address;
+    settlementResult?: PaymentResponse;
   };
-}
-
-// ============================================================================
-// Payment Verification
-// ============================================================================
-
-/**
- * Verify an EIP-712 payment signature locally using viem
- */
-async function verifyPaymentSignatureLocal(
-  payment: SignedPayment,
-  expectedRecipient: Address,
-  chainId: number
-): Promise<PaymentVerificationResult> {
-  try {
-    const { payload, signature, signer } = payment;
-
-    // Check deadline
-    const now = Math.floor(Date.now() / 1000);
-    if (payload.deadline < now) {
-      return {
-        valid: false,
-        error: `Payment expired at ${new Date(payload.deadline * 1000).toISOString()}`,
-      };
-    }
-
-    // Check chain ID matches
-    if (payload.chainId !== chainId) {
-      return {
-        valid: false,
-        error: `Chain ID mismatch: expected ${chainId}, got ${payload.chainId}`,
-      };
-    }
-
-    // Check recipient matches
-    if (payload.payTo.toLowerCase() !== expectedRecipient.toLowerCase()) {
-      return {
-        valid: false,
-        error: `Recipient mismatch: expected ${expectedRecipient}, got ${payload.payTo}`,
-      };
-    }
-
-    // Create domain for verification
-    const domain = {
-      name: X402_DOMAIN_NAME,
-      version: X402_VERSION,
-      chainId,
-    };
-
-    // Verify the typed data signature
-    const isValid = await verifyTypedData({
-      address: signer as Address,
-      domain,
-      types: PAYMENT_TYPES,
-      primaryType: 'Payment',
-      message: {
-        amount: BigInt(payload.amount),
-        token: payload.token as Address,
-        chainId: BigInt(payload.chainId),
-        payTo: payload.payTo as Address,
-        payer: payload.payer as Address,
-        deadline: BigInt(payload.deadline),
-        nonce: payload.nonce,
-        resource: payload.resource ?? '',
-      },
-      signature: signature as `0x${string}`,
-    });
-
-    if (!isValid) {
-      return {
-        valid: false,
-        error: 'Signature verification failed',
-      };
-    }
-
-    return {
-      valid: true,
-      signer: signer as Address,
-      payload,
-    };
-  } catch (error) {
-    return {
-      valid: false,
-      error: error instanceof Error ? error.message : 'Unknown verification error',
-    };
-  }
-}
-
-/**
- * Verify payment through external facilitator service
- */
-async function verifyPaymentWithFacilitator(
-  payment: SignedPayment,
-  facilitatorUrl: string,
-  networkId: string
-): Promise<PaymentVerificationResult> {
-  try {
-    const request: FacilitatorVerifyRequest = {
-      signature: payment.signature,
-      payload: payment.payload,
-      networkId,
-    };
-
-    const response = await axios.post<FacilitatorVerifyResponse>(
-      `${facilitatorUrl}/verify`,
-      request,
-      {
-        timeout: 10000,
-        headers: { 'Content-Type': 'application/json' },
-      }
-    );
-
-    if (response.data.valid) {
-      return {
-        valid: true,
-        signer: response.data.signer as Address,
-        payload: payment.payload,
-      };
-    }
-
-    return {
-      valid: false,
-      error: response.data.error ?? 'Facilitator rejected payment',
-    };
-  } catch (error) {
-    return {
-      valid: false,
-      error: error instanceof Error 
-        ? `Facilitator error: ${error.message}` 
-        : 'Facilitator verification failed',
-    };
-  }
 }
 
 // ============================================================================
@@ -225,43 +76,42 @@ async function verifyPaymentWithFacilitator(
 // ============================================================================
 
 /**
- * Create x402 payment middleware for Express
- * 
+ * Create x402 payment middleware for Express.
+ *
+ * Returns 402 with proper `accepts` array when no payment is present.
+ * Validates and optionally forwards payment to a facilitator for on-chain settlement.
+ *
  * @example
  * ```typescript
- * import express from 'express';
- * import { x402Middleware } from '@wazabiai/x402/server';
- * 
- * const app = express();
- * 
- * // Protect routes with payment requirement
  * app.use('/api/paid', x402Middleware({
  *   recipientAddress: '0x...',
- *   amount: '1000000000000000000', // 1 token
+ *   amount: '1000000',
+ *   tokenAddress: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+ *   settlementAddress: '0x...',
+ *   treasuryAddress: '0x1b4F633B1FC5FC26Fb8b722b2373B3d4D71aCaeB',
+ *   facilitatorUrl: 'https://facilitator.wazabi.ai',
  * }));
- * 
- * app.get('/api/paid/resource', (req, res) => {
- *   // Payment verified, serve resource
- *   res.json({ data: 'premium content' });
- * });
  * ```
  */
 export function x402Middleware(config: X402MiddlewareConfig): RequestHandler {
   const {
     recipientAddress,
     amount,
-    tokenAddress = BSC_USDT.address,
+    tokenAddress = BASE_USDC.address as `0x${string}`,
+    settlementAddress,
+    treasuryAddress,
+    feeBps = DEFAULT_FEE_BPS,
     facilitatorUrl,
     description,
-    networkId = BSC_CAIP_ID,
+    networkId = BASE_CAIP_ID,
     deadlineDuration = 300,
-    nonceGenerator = generateNonce,
-    verifyPayment: customVerify,
+    acceptedSchemes = ['permit2'],
     excludeRoutes = [],
     onError,
   } = config;
 
-  const chainId = extractChainId(networkId);
+  // Validate chainId at initialization
+  extractChainId(networkId);
 
   return async (req: X402Request, res: Response, next: NextFunction): Promise<void> => {
     try {
@@ -272,23 +122,24 @@ export function x402Middleware(config: X402MiddlewareConfig): RequestHandler {
         return;
       }
 
-      // Get payment signature header
-      const signatureHeader = req.headers[X402_HEADERS.PAYMENT_SIGNATURE];
-      const payloadHeader = req.headers[X402_HEADERS.PAYMENT_PAYLOAD];
+      // Check for x-payment header
+      const paymentHeader = req.headers[X402_HEADERS.PAYMENT];
 
-      // If no payment signature, return 402
-      if (!signatureHeader) {
-        const requirement: PaymentRequirement = {
+      // If no payment, return 402 with payment requirement
+      if (!paymentHeader) {
+        const requirement = buildPaymentRequirement({
+          recipientAddress,
           amount,
-          token: tokenAddress,
-          network_id: networkId,
-          pay_to: recipientAddress,
+          tokenAddress,
+          settlementAddress,
+          treasuryAddress,
+          feeBps,
+          networkId,
+          deadlineDuration,
+          acceptedSchemes,
           description,
           resource: req.originalUrl,
-          expires_at: calculateDeadline(deadlineDuration),
-          nonce: nonceGenerator(),
-          version: X402_VERSION,
-        };
+        });
 
         res.status(402);
         res.setHeader(X402_HEADERS.PAYMENT_REQUIRED, JSON.stringify(requirement));
@@ -299,16 +150,13 @@ export function x402Middleware(config: X402MiddlewareConfig): RequestHandler {
         return;
       }
 
-      // Parse the payment payload
+      // Parse the payment payload from x-payment header
       let payload: PaymentPayload;
       try {
-        if (!payloadHeader) {
-          throw new Error('Missing payment payload header');
-        }
-        const parsedPayload = JSON.parse(
-          typeof payloadHeader === 'string' ? payloadHeader : String(payloadHeader)
+        const parsed = JSON.parse(
+          typeof paymentHeader === 'string' ? paymentHeader : String(paymentHeader)
         );
-        const result = PaymentPayloadSchema.safeParse(parsedPayload);
+        const result = PaymentPayloadSchema.safeParse(parsed);
         if (!result.success) {
           throw new Error(`Invalid payload: ${result.error.message}`);
         }
@@ -321,56 +169,61 @@ export function x402Middleware(config: X402MiddlewareConfig): RequestHandler {
         return;
       }
 
-      // Construct signed payment
-      const signedPayment: SignedPayment = {
-        payload,
-        signature: (typeof signatureHeader === 'string' 
-          ? signatureHeader 
-          : String(signatureHeader)) as `0x${string}`,
-        signer: payload.payer as `0x${string}`,
-      };
-
-      // Verify the payment
-      let verificationResult: PaymentVerificationResult;
-
-      if (facilitatorUrl) {
-        // Use external facilitator
-        verificationResult = await verifyPaymentWithFacilitator(
-          signedPayment,
-          facilitatorUrl,
-          networkId
-        );
-      } else {
-        // Local verification
-        verificationResult = await verifyPaymentSignatureLocal(
-          signedPayment,
-          recipientAddress,
-          chainId
-        );
-      }
-
-      if (!verificationResult.valid) {
-        res.status(402).json({
-          error: 'Payment Verification Failed',
-          message: verificationResult.error,
+      // Basic validation: network must match
+      if (payload.network !== networkId) {
+        res.status(400).json({
+          error: 'Network Mismatch',
+          message: `Expected ${networkId}, got ${payload.network}`,
         });
         return;
       }
 
-      // Run custom verification if provided
-      if (customVerify) {
-        const customValid = await customVerify(signedPayment, req);
-        if (!customValid) {
-          res.status(402).json({
-            error: 'Payment Rejected',
-            message: 'Custom verification failed',
+      // Validate deadline hasn't passed
+      const now = Math.floor(Date.now() / 1000);
+      if (payload.scheme === 'permit2') {
+        if (payload.permit.deadline < now) {
+          res.status(400).json({
+            error: 'Payment Expired',
+            message: `Payment deadline has passed`,
+          });
+          return;
+        }
+      } else if (payload.scheme === 'erc3009') {
+        if (payload.authorization.validBefore < now) {
+          res.status(400).json({
+            error: 'Payment Expired',
+            message: `Authorization validity has passed`,
           });
           return;
         }
       }
 
-      // Replay protection: ensure this nonce hasn't been used before
-      if (!nonceRegistry.claim(payload.nonce)) {
+      // Validate amount covers the required amount
+      if (payload.scheme === 'permit2') {
+        const totalPermitted = BigInt(payload.permit.permitted[0]!.amount) +
+          BigInt(payload.permit.permitted[1]!.amount);
+        if (totalPermitted < BigInt(amount)) {
+          res.status(402).json({
+            error: 'Insufficient Payment',
+            message: `Expected at least ${amount}, got ${totalPermitted.toString()}`,
+          });
+          return;
+        }
+      } else if (payload.scheme === 'erc3009') {
+        if (BigInt(payload.authorization.value) < BigInt(amount)) {
+          res.status(402).json({
+            error: 'Insufficient Payment',
+            message: `Expected at least ${amount}, got ${payload.authorization.value}`,
+          });
+          return;
+        }
+      }
+
+      // Replay protection: use a unique nonce from the payload
+      const payloadNonce = payload.scheme === 'permit2'
+        ? payload.permit.nonce
+        : payload.authorization.nonce;
+      if (!nonceRegistry.claim(payloadNonce)) {
         res.status(402).json({
           error: 'Replay Detected',
           message: 'This payment nonce has already been used',
@@ -378,21 +231,38 @@ export function x402Middleware(config: X402MiddlewareConfig): RequestHandler {
         return;
       }
 
-      // Check amount matches
-      if (BigInt(payload.amount) < BigInt(amount)) {
-        res.status(402).json({
-          error: 'Insufficient Payment',
-          message: `Expected ${amount}, received ${payload.amount}`,
-        });
-        return;
-      }
+      // Forward to facilitator for on-chain settlement
+      if (facilitatorUrl) {
+        const settlementResult = await settleWithFacilitator(payload, facilitatorUrl);
 
-      // Attach payment info to request
-      req.x402 = {
-        payment: signedPayment,
-        verified: true,
-        signer: verificationResult.signer!,
-      };
+        if (!settlementResult.success) {
+          res.status(402).json({
+            error: 'Settlement Failed',
+            message: 'On-chain settlement failed',
+          });
+          return;
+        }
+
+        // Attach to request and return settlement info in response header
+        req.x402 = {
+          payment: payload,
+          verified: true,
+          signer: payload.payer as Address,
+          settlementResult,
+        };
+
+        res.setHeader(
+          X402_HEADERS.PAYMENT_RESPONSE,
+          JSON.stringify(settlementResult)
+        );
+      } else {
+        // No facilitator — attach payment info but don't settle on-chain
+        req.x402 = {
+          payment: payload,
+          verified: true,
+          signer: payload.payer as Address,
+        };
+      }
 
       next();
     } catch (error) {
@@ -411,88 +281,115 @@ export function x402Middleware(config: X402MiddlewareConfig): RequestHandler {
 }
 
 // ============================================================================
+// Facilitator Settlement
+// ============================================================================
+
+async function settleWithFacilitator(
+  payload: PaymentPayload,
+  facilitatorUrl: string
+): Promise<PaymentResponse> {
+  try {
+    const response = await axios.post<PaymentResponse>(
+      `${facilitatorUrl}/x402/settle`,
+      payload,
+      {
+        timeout: 30000,
+        headers: { 'Content-Type': 'application/json' },
+      }
+    );
+
+    return response.data;
+  } catch (error) {
+    return {
+      success: false,
+      network: payload.network,
+    };
+  }
+}
+
+// ============================================================================
 // Utility Functions
 // ============================================================================
+
+/**
+ * Build a payment requirement with accepts array
+ */
+function buildPaymentRequirement(params: {
+  recipientAddress: `0x${string}`;
+  amount: string;
+  tokenAddress: `0x${string}`;
+  settlementAddress: `0x${string}`;
+  treasuryAddress: `0x${string}`;
+  feeBps: number;
+  networkId: string;
+  deadlineDuration: number;
+  acceptedSchemes: PaymentScheme[];
+  description?: string;
+  resource?: string;
+}): PaymentRequirement {
+  const maxDeadline = calculateDeadline(params.deadlineDuration);
+
+  const accepts = params.acceptedSchemes.map(scheme => ({
+    scheme,
+    network: params.networkId,
+    token: params.tokenAddress as string,
+    amount: params.amount,
+    recipient: params.recipientAddress as string,
+    settlement: params.settlementAddress as string,
+    treasury: params.treasuryAddress as string,
+    feeBps: params.feeBps,
+    maxDeadline,
+  }));
+
+  return {
+    x402Version: X402_VERSION,
+    accepts,
+    description: params.description,
+    resource: params.resource,
+  };
+}
 
 /**
  * Create a payment requirement object for manual 402 responses
  */
 export function createPaymentRequirement(
-  config: Pick<X402MiddlewareConfig, 
-    'recipientAddress' | 'amount' | 'tokenAddress' | 'description' | 'networkId'
+  config: Pick<X402MiddlewareConfig,
+    'recipientAddress' | 'amount' | 'tokenAddress' | 'settlementAddress' |
+    'treasuryAddress' | 'feeBps' | 'description' | 'networkId' | 'acceptedSchemes'
   > & {
     resource?: string;
-    deadline?: number;
-    nonce?: string;
+    deadlineDuration?: number;
   }
 ): PaymentRequirement {
-  const {
-    recipientAddress,
-    amount,
-    tokenAddress = BSC_USDT.address,
-    description,
-    networkId = BSC_CAIP_ID,
-    resource,
-    deadline,
-    nonce,
-  } = config;
-
-  return {
-    amount,
-    token: tokenAddress,
-    network_id: networkId,
-    pay_to: recipientAddress,
-    description,
-    resource,
-    expires_at: deadline ?? calculateDeadline(300),
-    nonce: nonce ?? generateNonce(),
-    version: X402_VERSION,
-  };
-}
-
-/**
- * Verify a signed payment independently (not as middleware)
- */
-export async function verifyPayment(
-  payment: SignedPayment,
-  recipientAddress: Address,
-  networkId: string = BSC_CAIP_ID,
-  facilitatorUrl?: string
-): Promise<PaymentVerificationResult> {
-  const chainId = extractChainId(networkId);
-
-  if (facilitatorUrl) {
-    return verifyPaymentWithFacilitator(payment, facilitatorUrl, networkId);
-  }
-
-  return verifyPaymentSignatureLocal(payment, recipientAddress, chainId);
+  return buildPaymentRequirement({
+    recipientAddress: config.recipientAddress,
+    amount: config.amount,
+    tokenAddress: config.tokenAddress ?? BASE_USDC.address as `0x${string}`,
+    settlementAddress: config.settlementAddress,
+    treasuryAddress: config.treasuryAddress,
+    feeBps: config.feeBps ?? DEFAULT_FEE_BPS,
+    networkId: config.networkId ?? BASE_CAIP_ID,
+    deadlineDuration: config.deadlineDuration ?? 300,
+    acceptedSchemes: config.acceptedSchemes ?? ['permit2'],
+    description: config.description,
+    resource: config.resource,
+  });
 }
 
 /**
  * Parse payment from request headers
  */
-export function parsePaymentFromRequest(req: Request): SignedPayment | null {
+export function parsePaymentFromRequest(req: Request): PaymentPayload | null {
   try {
-    const signatureHeader = req.headers[X402_HEADERS.PAYMENT_SIGNATURE];
-    const payloadHeader = req.headers[X402_HEADERS.PAYMENT_PAYLOAD];
+    const paymentHeader = req.headers[X402_HEADERS.PAYMENT];
+    if (!paymentHeader) return null;
 
-    if (!signatureHeader || !payloadHeader) {
-      return null;
-    }
-
-    const payload = JSON.parse(
-      typeof payloadHeader === 'string' ? payloadHeader : String(payloadHeader)
+    const parsed = JSON.parse(
+      typeof paymentHeader === 'string' ? paymentHeader : String(paymentHeader)
     );
 
-    const result = SignedPaymentSchema.safeParse({
-      payload,
-      signature: typeof signatureHeader === 'string' 
-        ? signatureHeader 
-        : String(signatureHeader),
-      signer: payload.payer,
-    });
-
-    return result.success ? result.data as SignedPayment : null;
+    const result = PaymentPayloadSchema.safeParse(parsed);
+    return result.success ? result.data : null;
   } catch {
     return null;
   }
@@ -506,7 +403,7 @@ export {
   type X402MiddlewareConfig,
   type PaymentRequirement,
   type PaymentPayload,
-  type SignedPayment,
+  type PaymentResponse,
   type PaymentVerificationResult,
   X402_HEADERS,
   PaymentVerificationError,
@@ -514,11 +411,8 @@ export {
 } from '../types/index.js';
 
 export {
-  BSC_CAIP_ID,
-  BSC_CHAIN_ID,
-  BSC_USDT,
-  BSC_USDC,
-  BSC_TOKENS,
-  formatTokenAmount,
-  parseTokenAmount,
-} from '../chains/bnb.js';
+  BASE_CAIP_ID,
+  BASE_CHAIN_ID,
+  BASE_USDC,
+  BASE_TOKENS,
+} from '../chains/base.js';
