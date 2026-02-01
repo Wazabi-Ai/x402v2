@@ -3,9 +3,7 @@ import type { Express, Request, Response } from 'express';
 import type { PublicClient, WalletClient } from 'viem';
 import { InMemoryStore } from '../src/facilitator/db/schema.js';
 import { createFacilitator } from '../src/facilitator/server.js';
-import { WalletService } from '../src/facilitator/services/wallet.js';
 import {
-  HANDLE_SUFFIX,
   SETTLEMENT_FEE_BPS,
 } from '../src/facilitator/types.js';
 import type { Permit2Payload, ERC3009Payload } from '../src/types/index.js';
@@ -42,8 +40,6 @@ const mockWalletClient = {
   chain: { id: 8453 },
 } as unknown as WalletClient;
 
-const TEST_FACTORY_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as `0x${string}`;
-
 const mockClients = {
   treasuryAddress: MOCK_TREASURY,
   settlementAddresses: {
@@ -52,13 +48,6 @@ const mockClients = {
   } as Record<string, `0x${string}`>,
   publicClients: { 'eip155:8453': mockPublicClient, 'eip155:56': mockPublicClient } as Record<string, PublicClient>,
   walletClients: { 'eip155:8453': mockWalletClient, 'eip155:56': mockWalletClient } as Record<string, WalletClient>,
-  walletService: new WalletService({
-    accountFactoryAddresses: {
-      'eip155:1': TEST_FACTORY_ADDRESS,
-      'eip155:56': TEST_FACTORY_ADDRESS,
-      'eip155:8453': TEST_FACTORY_ADDRESS,
-    },
-  }),
 };
 
 // ============================================================================
@@ -124,7 +113,6 @@ interface MockResponse {
   send: (data: string) => MockResponse;
   setHeader: (name: string, value: string) => MockResponse;
   sendStatus: (code: number) => MockResponse;
-  sendFile: (path: string, cb?: (err: Error | null) => void) => MockResponse;
   _statusCode: number;
   _body: unknown;
   _headers: Record<string, string>;
@@ -153,9 +141,6 @@ function createMockResponse(): MockResponse {
     },
     sendStatus(code: number) {
       res._statusCode = code;
-      return res;
-    },
-    sendFile(_path: string, _cb?: (err: Error | null) => void) {
       return res;
     },
   };
@@ -224,36 +209,16 @@ describe('Facilitator Server', () => {
       expect(findRoute(routes, 'GET', '/health')).toBeDefined();
     });
 
-    it('should register POST /register', () => {
-      expect(findRoute(routes, 'POST', '/register')).toBeDefined();
-    });
-
-    it('should register GET /resolve/:handle', () => {
-      expect(findRoute(routes, 'GET', '/resolve/:handle')).toBeDefined();
-    });
-
-    it('should register GET /balance/:handle', () => {
-      expect(findRoute(routes, 'GET', '/balance/:handle')).toBeDefined();
-    });
-
-    it('should register GET /history/:handle', () => {
-      expect(findRoute(routes, 'GET', '/history/:handle')).toBeDefined();
-    });
-
-    it('should register GET /profile/:handle', () => {
-      expect(findRoute(routes, 'GET', '/profile/:handle')).toBeDefined();
-    });
-
-    it('should register GET /deployment/:handle', () => {
-      expect(findRoute(routes, 'GET', '/deployment/:handle')).toBeDefined();
+    it('should register POST /x402/settle', () => {
+      expect(findRoute(routes, 'POST', '/x402/settle')).toBeDefined();
     });
 
     it('should register POST /verify', () => {
       expect(findRoute(routes, 'POST', '/verify')).toBeDefined();
     });
 
-    it('should register POST /x402/settle', () => {
-      expect(findRoute(routes, 'POST', '/x402/settle')).toBeDefined();
+    it('should register GET /history/:address', () => {
+      expect(findRoute(routes, 'GET', '/history/:address')).toBeDefined();
     });
 
     it('should register GET /supported', () => {
@@ -278,146 +243,6 @@ describe('Facilitator Server', () => {
       expect(res._statusCode).toBe(200);
       expect(res._body).toHaveProperty('status', 'healthy');
       expect(res._body).toHaveProperty('service', 'wazabi-x402-facilitator');
-    });
-  });
-
-  // ========================================================================
-  // Registration Tests
-  // ========================================================================
-
-  describe('POST /register', () => {
-    it('should register a new handle', async () => {
-      const route = findRoute(routes, 'POST', '/register')!;
-      const res = createMockResponse();
-
-      await route.handler(
-        { body: { handle: 'molty', networks: ['eip155:8453'] } },
-        res
-      );
-
-      expect(res._statusCode).toBe(201);
-      const body = res._body as Record<string, unknown>;
-      expect(body).toHaveProperty('handle', 'molty.wazabi-x402');
-      expect(body).toHaveProperty('wallet');
-      expect(body).toHaveProperty('session_key');
-    });
-
-    it('should reject invalid handle', async () => {
-      const route = findRoute(routes, 'POST', '/register')!;
-      const res = createMockResponse();
-
-      await route.handler(
-        { body: { handle: 'A' } },
-        res
-      );
-
-      expect(res._statusCode).toBe(400);
-    });
-
-    it('should reject duplicate handle', async () => {
-      const route = findRoute(routes, 'POST', '/register')!;
-      const res1 = createMockResponse();
-      await route.handler(
-        { body: { handle: 'molty', networks: ['eip155:8453'] } },
-        res1
-      );
-
-      const res2 = createMockResponse();
-      await route.handler(
-        { body: { handle: 'molty', networks: ['eip155:8453'] } },
-        res2
-      );
-
-      expect(res2._statusCode).toBe(409);
-    });
-
-    it('should reject missing body', async () => {
-      const route = findRoute(routes, 'POST', '/register')!;
-      const res = createMockResponse();
-
-      await route.handler({ body: {} }, res);
-
-      expect(res._statusCode).toBe(400);
-    });
-  });
-
-  // ========================================================================
-  // Resolve Tests
-  // ========================================================================
-
-  describe('GET /resolve/:handle', () => {
-    it('should resolve registered handle', async () => {
-      // First register
-      const regRoute = findRoute(routes, 'POST', '/register')!;
-      const regRes = createMockResponse();
-      await regRoute.handler(
-        { body: { handle: 'molty', networks: ['eip155:8453'] } },
-        regRes
-      );
-
-      // Then resolve
-      const resolveRoute = findRoute(routes, 'GET', '/resolve/:handle')!;
-      const res = createMockResponse();
-      await resolveRoute.handler(
-        { params: { handle: 'molty' } } as Partial<Request>,
-        res
-      );
-
-      expect(res._statusCode).toBe(200);
-      const body = res._body as Record<string, unknown>;
-      expect(body).toHaveProperty('handle', 'molty.wazabi-x402');
-      expect(body).toHaveProperty('address');
-      expect(body).toHaveProperty('active', true);
-    });
-
-    it('should return 404 for unknown handle', async () => {
-      const route = findRoute(routes, 'GET', '/resolve/:handle')!;
-      const res = createMockResponse();
-      await route.handler(
-        { params: { handle: 'unknown' } } as Partial<Request>,
-        res
-      );
-
-      expect(res._statusCode).toBe(404);
-    });
-  });
-
-  // ========================================================================
-  // Balance Tests
-  // ========================================================================
-
-  describe('GET /balance/:handle', () => {
-    it('should return balances for registered handle', async () => {
-      const regRoute = findRoute(routes, 'POST', '/register')!;
-      const regRes = createMockResponse();
-      await regRoute.handler(
-        { body: { handle: 'molty', networks: ['eip155:56', 'eip155:8453'] } },
-        regRes
-      );
-
-      const balanceRoute = findRoute(routes, 'GET', '/balance/:handle')!;
-      const res = createMockResponse();
-      await balanceRoute.handler(
-        { params: { handle: 'molty' } } as Partial<Request>,
-        res
-      );
-
-      expect(res._statusCode).toBe(200);
-      const body = res._body as Record<string, unknown>;
-      expect(body).toHaveProperty('handle', 'molty.wazabi-x402');
-      expect(body).toHaveProperty('balances');
-      expect(body).toHaveProperty('total_usd');
-    });
-
-    it('should return 404 for unknown handle', async () => {
-      const route = findRoute(routes, 'GET', '/balance/:handle')!;
-      const res = createMockResponse();
-      await route.handler(
-        { params: { handle: 'unknown' } } as Partial<Request>,
-        res
-      );
-
-      expect(res._statusCode).toBe(404);
     });
   });
 
@@ -463,7 +288,7 @@ describe('Facilitator Server', () => {
       const res = createMockResponse();
 
       await route.handler(
-        { body: { scheme: 'permit2' } }, // Missing required fields
+        { body: { scheme: 'permit2' } },
         res
       );
 
@@ -522,11 +347,12 @@ describe('Facilitator Server', () => {
       expect(res._statusCode).toBe(200);
       const body = res._body as Record<string, unknown>;
       expect(body).toHaveProperty('networks');
-      expect(body).toHaveProperty('handle_suffix', HANDLE_SUFFIX);
-      expect(body).toHaveProperty('wallet_type', 'ERC-4337');
+      expect(body).toHaveProperty('schemes');
+      expect(body).toHaveProperty('fee_bps', SETTLEMENT_FEE_BPS);
 
       const networks = (body as { networks: Array<{ id: string }> }).networks;
       const ids = networks.map(n => n.id);
+      expect(ids).toContain('eip155:1');
       expect(ids).toContain('eip155:56');
       expect(ids).toContain('eip155:8453');
     });
@@ -545,7 +371,6 @@ describe('Facilitator Server', () => {
       expect(res._headers['Content-Type']).toBe('text/markdown; charset=utf-8');
       expect(typeof res._body).toBe('string');
       expect(res._body as string).toContain('Wazabi x402');
-      expect(res._body as string).toContain('/register');
       expect(res._body as string).toContain('/settle');
       expect(res._body as string).toContain('0.5%');
     });
@@ -555,20 +380,11 @@ describe('Facilitator Server', () => {
   // History Tests
   // ========================================================================
 
-  describe('GET /history/:handle', () => {
-    it('should return history for registered handle with transactions', async () => {
-      // Register agent
-      const regRoute = findRoute(routes, 'POST', '/register')!;
-      const r1 = createMockResponse();
-      await regRoute.handler(
-        { body: { handle: 'molty', networks: ['eip155:8453'] } },
-        r1
-      );
-
-      // Create a transaction directly in the store
+  describe('GET /history/:address', () => {
+    it('should return history for address with transactions', async () => {
       await store.createTransaction({
         id: 'tx-hist-1',
-        from_handle: 'molty.wazabi-x402',
+        from_address: MOCK_PAYER,
         to_address: MOCK_RECIPIENT,
         amount: '25000000',
         token: MOCK_TOKEN,
@@ -580,12 +396,11 @@ describe('Facilitator Server', () => {
         created_at: new Date(),
       });
 
-      // Get history
-      const histRoute = findRoute(routes, 'GET', '/history/:handle')!;
+      const histRoute = findRoute(routes, 'GET', '/history/:address')!;
       const res = createMockResponse();
       await histRoute.handler(
         {
-          params: { handle: 'molty' },
+          params: { address: MOCK_PAYER },
           query: { limit: '20', offset: '0' },
         } as unknown as Partial<Request>,
         res
@@ -593,7 +408,7 @@ describe('Facilitator Server', () => {
 
       expect(res._statusCode).toBe(200);
       const body = res._body as Record<string, unknown>;
-      expect(body).toHaveProperty('handle', 'molty.wazabi-x402');
+      expect(body).toHaveProperty('address', MOCK_PAYER);
 
       const txs = (body as { transactions: Array<{ type: string; amount: string }> }).transactions;
       expect(txs).toHaveLength(1);
@@ -601,54 +416,18 @@ describe('Facilitator Server', () => {
       expect(txs[0]?.amount).toBe('25000000');
     });
 
-    it('should return 404 for unknown handle', async () => {
-      const route = findRoute(routes, 'GET', '/history/:handle')!;
+    it('should return 400 for invalid address', async () => {
+      const route = findRoute(routes, 'GET', '/history/:address')!;
       const res = createMockResponse();
       await route.handler(
         {
-          params: { handle: 'unknown' },
+          params: { address: 'not-an-address' },
           query: {},
         } as unknown as Partial<Request>,
         res
       );
 
-      expect(res._statusCode).toBe(404);
-    });
-  });
-
-  // ========================================================================
-  // Profile Tests
-  // ========================================================================
-
-  describe('GET /profile/:handle', () => {
-    it('should return full profile', async () => {
-      const regRoute = findRoute(routes, 'POST', '/register')!;
-      const regRes = createMockResponse();
-      await regRoute.handler(
-        {
-          body: {
-            handle: 'molty',
-            networks: ['eip155:8453'],
-            metadata: { agent_type: 'openclaw' },
-          },
-        },
-        regRes
-      );
-
-      const profRoute = findRoute(routes, 'GET', '/profile/:handle')!;
-      const res = createMockResponse();
-      await profRoute.handler(
-        { params: { handle: 'molty' } } as Partial<Request>,
-        res
-      );
-
-      expect(res._statusCode).toBe(200);
-      const body = res._body as Record<string, unknown>;
-      expect(body).toHaveProperty('handle', 'molty.wazabi-x402');
-      expect(body).toHaveProperty('wallet_address');
-      expect(body).toHaveProperty('networks');
-      expect(body).toHaveProperty('metadata');
-      expect(body).toHaveProperty('total_transactions', 0);
+      expect(res._statusCode).toBe(400);
     });
   });
 
@@ -657,20 +436,13 @@ describe('Facilitator Server', () => {
   // ========================================================================
 
   describe('POST /verify', () => {
-    it('should verify a registered sender', async () => {
-      const regRoute = findRoute(routes, 'POST', '/register')!;
-      const regRes = createMockResponse();
-      await regRoute.handler(
-        { body: { handle: 'molty', networks: ['eip155:8453'] } },
-        regRes
-      );
-
+    it('should verify a valid address', async () => {
       const verifyRoute = findRoute(routes, 'POST', '/verify')!;
       const res = createMockResponse();
       await verifyRoute.handler(
         {
           body: {
-            from: 'molty',
+            from: MOCK_PAYER,
             amount: '10.00',
             token: 'USDC',
             network: 'eip155:8453',

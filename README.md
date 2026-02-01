@@ -193,7 +193,7 @@ formatTokenAmount(1000000000000000000n, BSC_USDT.address); // '1.00'
 
 ## Facilitator
 
-The Facilitator is an optional service that extends x402 with agent identity, ERC-4337 smart wallets, and on-chain settlement.
+The Facilitator is a thin settlement relay for the x402 payment protocol. It receives signed Permit2 or ERC-3009 payloads and submits them on-chain. The facilitator pays gas but cannot redirect funds (non-custodial). Agents and users bring their own EOA wallet.
 
 ```bash
 # Run standalone
@@ -214,36 +214,37 @@ app.listen(3000);
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/register` | Register a handle + deploy smart wallet |
-| GET | `/resolve/:handle` | Handle to address lookup |
-| GET | `/balance/:handle` | Token balances across chains |
-| GET | `/history/:handle` | Transaction history |
-| GET | `/profile/:handle` | Full agent profile |
-| POST | `/settle` | Execute non-custodial settlement (0.5% fee) |
-| POST | `/verify` | Verify x402 payment signature |
+| POST | `/x402/settle` | Submit signed payment for on-chain settlement (0.5% fee) |
+| POST | `/verify` | Verify x402 payment sender address |
+| GET | `/history/:address` | Transaction history for an Ethereum address |
 | GET | `/supported` | Available networks, tokens, and schemes |
 | GET | `/skill.md` | OpenClaw skill file for AI agents |
 | GET | `/health` | Health check |
 
-### Register
-
-```bash
-curl -X POST http://localhost:3000/register \
-  -H 'Content-Type: application/json' \
-  -d '{"handle": "my-agent"}'
-```
-
-Returns a handle (`my-agent.wazabi-x402`), a deterministic wallet address (same on all chains), and a session key pair.
-
 ### Settle
 
 ```bash
-curl -X POST http://localhost:3000/settle \
+curl -X POST http://localhost:3000/x402/settle \
   -H 'Content-Type: application/json' \
-  -d '{"from": "agent-a", "to": "agent-b", "amount": "10.00", "token": "USDC", "network": "eip155:8453"}'
+  -d '{
+    "scheme": "permit2",
+    "network": "eip155:8453",
+    "payer": "0x...",
+    "signature": "0x...",
+    "permit": {
+      "permitted": [
+        { "token": "0x...", "amount": "9950000" },
+        { "token": "0x...", "amount": "50000" }
+      ],
+      "nonce": "123456789",
+      "deadline": 1700000000
+    },
+    "witness": { "recipient": "0x...", "feeBps": 50 },
+    "spender": "0x..."
+  }'
 ```
 
-Works with both handles and raw addresses. Settlement is **non-custodial** -- funds move directly from payer to recipient via on-chain contracts. The facilitator submits the transaction but cannot redirect funds because the payer's EIP-712 signature cryptographically commits to the recipient address.
+Settlement is **non-custodial** -- funds move directly from payer to recipient via on-chain contracts. The facilitator submits the transaction but cannot redirect funds because the payer's EIP-712 signature cryptographically commits to the recipient address.
 
 Two settlement paths:
 - **Permit2** -- for any ERC-20 token. Uses Uniswap's canonical Permit2 contract with batch witness transfers. The witness commits to `(recipient, feeBps)` in the payer's signature.
@@ -258,21 +259,10 @@ Copy `.env.example` and set:
 ```bash
 TREASURY_PRIVATE_KEY=0x...          # required, derives treasury address
 
-# Contract addresses (per chain)
-ACCOUNT_FACTORY_ETH=0x...           # required
-ACCOUNT_FACTORY_BSC=0x...
-ACCOUNT_FACTORY_BASE=0x...
-PAYMASTER_ETH=0x...                 # required
-PAYMASTER_BSC=0x...
-PAYMASTER_BASE=0x...
-SETTLEMENT_ETH=0x...                # WazabiSettlement per chain
+# WazabiSettlement contract addresses (per chain)
+SETTLEMENT_ETH=0x...
 SETTLEMENT_BSC=0x...
 SETTLEMENT_BASE=0x...
-
-# Bundler endpoints
-BUNDLER_URL_ETH=https://...         # required for wallet deployment
-BUNDLER_URL_BSC=https://...
-BUNDLER_URL_BASE=https://...
 
 # Optional
 RPC_ETH=https://eth.llamarpc.com
@@ -281,7 +271,6 @@ RPC_BASE=https://mainnet.base.org
 DATABASE_URL=postgresql://...       # defaults to in-memory
 PORT=3000
 PORTAL_DIR=./facilitator-portal     # dashboard UI directory
-ENTRYPOINT_ADDRESS=0x...            # ERC-4337 EntryPoint (v0.7 default)
 ```
 
 ## OpenClaw (AI Agent Integration)
@@ -292,23 +281,19 @@ The Facilitator exposes an **OpenClaw skill** at `GET /skill.md` -- a machine-re
 curl http://localhost:3000/skill.md
 ```
 
-This enables any OpenClaw-compatible agent to:
+Agents bring their own EOA wallet and use the facilitator for gas-abstracted settlement. This enables any OpenClaw-compatible agent to:
 
-- **Register** a handle and get a smart wallet across all supported chains
-- **Check balances** and transaction history
-- **Make payments** between agents or addresses via the `/settle` endpoint
+- **Make payments** by signing Permit2 or ERC-3009 payloads and submitting to `/x402/settle`
 - **Accept payments** by embedding x402 headers in HTTP responses
+- **Check history** via `/history/:address`
 
-No special SDK needed on the agent side -- just HTTP and the skill file.
+No special SDK needed on the agent side -- just HTTP, an EOA wallet, and the skill file.
 
 ## Smart contracts
 
-Four Solidity contracts in `contracts/` (Solidity 0.8.24):
+One Solidity contract in `contracts/` (Solidity 0.8.24):
 
 - **WazabiSettlement** -- Non-custodial payment settlement with Permit2 batch witness and ERC-3009 paths. Atomically splits funds between recipient (net) and treasury (fee). The payer's signature commits to the recipient and fee rate, so the facilitator cannot redirect funds.
-- **WazabiAccount** -- ERC-4337 smart wallet with session key management, per-transaction and daily spending limits, and owner recovery
-- **WazabiAccountFactory** -- CREATE2 factory producing identical wallet addresses across all EVM chains (ERC-1967 proxy pattern)
-- **WazabiPaymaster** -- Gas sponsorship via ERC-20 token payment for UserOperations
 
 Compile with `npx hardhat compile`. Deploy with `npx hardhat run scripts/deploy.ts --network <network>`.
 
@@ -317,7 +302,7 @@ Compile with `npx hardhat compile`. Deploy with `npx hardhat run scripts/deploy.
 ```bash
 npm install
 npm run build          # ESM + CJS + declarations
-npm test               # 344 tests via Vitest
+npm test               # 271 tests via Vitest
 npm run dev            # build with watch
 ```
 

@@ -2,28 +2,21 @@
 /**
  * Standalone Wazabi x402 Facilitator Server
  *
- * Starts the facilitator API with the portal dashboard at root.
- * Requires all environment variables to be set — will not start without them.
+ * Non-custodial settlement relay for the x402 payment protocol.
+ * Requires TREASURY_PRIVATE_KEY to be set.
  *
  * Required environment variables:
- *   TREASURY_PRIVATE_KEY — Treasury wallet private key
- *   ACCOUNT_FACTORY_ETH  — WazabiAccountFactory on Ethereum
- *   ACCOUNT_FACTORY_BSC  — WazabiAccountFactory on BNB Chain
- *   ACCOUNT_FACTORY_BASE — WazabiAccountFactory on Base
- *   PAYMASTER_ETH        — Paymaster address on Ethereum
- *   PAYMASTER_BSC        — Paymaster address on BNB Chain
- *   PAYMASTER_BASE       — Paymaster address on Base
- *   BUNDLER_URL_ETH      — ERC-4337 bundler URL for Ethereum
- *   BUNDLER_URL_BSC      — ERC-4337 bundler URL for BNB Chain
- *   BUNDLER_URL_BASE     — ERC-4337 bundler URL for Base
+ *   TREASURY_PRIVATE_KEY — Treasury wallet private key (pays gas, receives fees)
  *
  * Optional environment variables:
- *   PORT                 — Server port (default: 3000)
- *   PORTAL_DIR           — Path to portal static files (default: ./facilitator-portal)
+ *   SETTLEMENT_ETH       — WazabiSettlement address on Ethereum
+ *   SETTLEMENT_BSC       — WazabiSettlement address on BNB Chain
+ *   SETTLEMENT_BASE      — WazabiSettlement address on Base
  *   RPC_ETH              — Ethereum RPC URL (default: public endpoint)
  *   RPC_BSC              — BNB Chain RPC URL (default: public endpoint)
  *   RPC_BASE             — Base RPC URL (default: public endpoint)
- *   DATABASE_URL         — PostgreSQL connection string (default: in-memory)
+ *   PORT                 — Server port (default: 3000)
+ *   PORTAL_DIR           — Path to portal static files (default: ./facilitator-portal)
  */
 
 import { resolve } from 'node:path';
@@ -38,6 +31,7 @@ const portalDir = resolve(config.portalDir || 'facilitator-portal');
 startFacilitator(config.port, {
   portalDir,
   treasuryAddress: config.treasuryAddress,
+  settlementAddresses: config.settlementAddresses,
   publicClients,
   walletClients,
 });

@@ -1,654 +1,258 @@
 /**
  * Wazabi x402 Facilitator Server
  *
- * The complete Agent Financial Platform server that extends the x402 protocol
- * with identity (handles), smart wallets (ERC-4337), and settlement (0.5% fee).
- *
- * Endpoints:
- *   POST   /register        — Create handle + deploy smart wallet
- *   GET    /resolve/:handle — Handle → address lookup
- *   GET    /balance/:handle — Token balances across chains
- *   GET    /history/:handle — Transaction history
- *   GET    /profile/:handle — Full agent profile
- *   POST   /verify          — Verify payment (x402 standard)
- *   POST   /settle          — Execute payment + 0.5% fee
- *   GET    /supported       — Networks, tokens, schemes
- *   GET    /health          — Health check
- *   GET    /skill.md        — OpenClaw skill file
- *   GET    /                — Portal dashboard (if portalDir configured)
+ * A thin settlement relay for the x402 payment protocol.
+ * Receives signed Permit2/ERC-3009 payloads from payers and submits them on-chain.
+ * The facilitator pays gas but cannot redirect funds (non-custodial).
  */
 
-import { resolve, join } from 'node:path';
-import type { Request, Response, NextFunction, Express } from 'express';
-import { InMemoryStore } from './db/schema.js';
-import { HandleService, HandleError } from './services/handle.js';
-import { SettlementService, SettlementError } from './services/settlement.js';
-import { WalletService } from './services/wallet.js';
-import {
-  RegisterRequestSchema,
-  VerifyRequestSchema,
-  HANDLE_SUFFIX,
-  SETTLEMENT_FEE_RATE,
-  SETTLEMENT_FEE_BPS,
-  AGENT_SUPPORTED_NETWORKS,
-} from './types.js';
-import type {
-  SupportedResponse,
-  BalanceResponse,
-  ResolveResponse,
-  ProfileResponse,
-} from './types.js';
-import { SUPPORTED_NETWORKS, getSupportedNetworkIds } from '../chains/index.js';
-import { PaymentPayloadSchema } from '../types/index.js';
+import type { Express, Request, Response } from 'express';
 import type { PublicClient, WalletClient } from 'viem';
+import { InMemoryStore } from './db/schema.js';
+import { SettlementService, SettlementError } from './services/settlement.js';
+import { VerifyRequestSchema, SETTLEMENT_FEE_BPS, SUPPORTED_NETWORK_IDS, isAddress } from './types.js';
+import { PaymentPayloadSchema } from '../types/index.js';
 
 // ============================================================================
-// Facilitator Application
+// Facilitator Config
 // ============================================================================
 
 export interface FacilitatorConfig {
-  /** Custom store (defaults to InMemoryStore) */
   store?: InMemoryStore;
-  /** Custom wallet service */
-  walletService?: WalletService;
-  /** Enable CORS (default: true) */
-  cors?: boolean;
-  /** Allowed CORS origins (default: '*'). Use an array for specific origins. */
-  corsOrigins?: string | string[];
-  /** Absolute or relative path to the facilitator-portal directory to serve the dashboard UI at root */
-  portalDir?: string;
-  /** Treasury wallet address for fee collection (required) */
   treasuryAddress: `0x${string}`;
-  /** WazabiSettlement contract addresses keyed by CAIP-2 network ID */
   settlementAddresses?: Record<string, `0x${string}`>;
-  /** Public clients for on-chain reads, keyed by CAIP-2 network ID (required) */
   publicClients: Record<string, PublicClient>;
-  /** Wallet clients for on-chain writes, keyed by CAIP-2 network ID (required) */
   walletClients: Record<string, WalletClient>;
-  /** Rate limit: max requests per window per IP (default: 100) */
+  cors?: boolean;
   rateLimitMax?: number;
-  /** Rate limit: window duration in milliseconds (default: 60000 = 1 minute) */
-  rateLimitWindowMs?: number;
+  portalDir?: string;
 }
 
-/**
- * Create and configure the Wazabi x402 Facilitator routes
- *
- * @example
- * ```typescript
- * import express from 'express';
- * import { createFacilitator } from '@wazabiai/x402/facilitator';
- *
- * const app = express();
- * app.use(express.json());
- * createFacilitator(app);
- * app.listen(3000);
- * ```
- */
-export function createFacilitator(
-  app: Express,
-  config: FacilitatorConfig
-): void {
-  const store = config.store ?? new InMemoryStore();
-  const walletService = config.walletService ?? new WalletService();
-  const handleService = new HandleService(store, walletService);
+// ============================================================================
+// Skill file generator
+// ============================================================================
 
-  const settlementService = new SettlementService(handleService, store, {
+function generateSkillMarkdown(baseUrl: string): string {
+  return `# Wazabi x402 Facilitator
+
+## Overview
+Non-custodial settlement relay for the x402 payment protocol. Submit signed Permit2 or ERC-3009 payment payloads and the facilitator settles them on-chain. The facilitator pays gas but cannot redirect funds.
+
+## Base URL
+${baseUrl}
+
+## Endpoints
+
+### POST /x402/settle
+Submit a signed x402 payment for on-chain settlement.
+
+**Body (Permit2):**
+\`\`\`json
+{
+  "scheme": "permit2",
+  "network": "eip155:8453",
+  "payer": "0x...",
+  "signature": "0x...",
+  "permit": {
+    "permitted": [
+      { "token": "0x...", "amount": "9950000" },
+      { "token": "0x...", "amount": "50000" }
+    ],
+    "nonce": "123456789",
+    "deadline": 1700000000
+  },
+  "witness": { "recipient": "0x...", "feeBps": 50 },
+  "spender": "0x..."
+}
+\`\`\`
+
+**Body (ERC-3009):**
+\`\`\`json
+{
+  "scheme": "erc3009",
+  "network": "eip155:8453",
+  "payer": "0x...",
+  "recipient": "0x...",
+  "signature": "0x...",
+  "authorization": {
+    "from": "0x...",
+    "to": "0x...",
+    "value": "10000000",
+    "validAfter": 0,
+    "validBefore": 1700000000,
+    "nonce": "0x..."
+  }
+}
+\`\`\`
+
+### POST /verify
+Verify a payment sender address.
+
+### GET /history/:address
+Transaction history for an Ethereum address.
+
+### GET /supported
+List supported networks, tokens, and settlement schemes.
+
+### GET /health
+Health check.
+
+## Fee
+0.5% protocol fee, split atomically on-chain.
+
+## Networks
+- Ethereum (eip155:1): USDC, USDT, WETH
+- BNB Chain (eip155:56): USDT, USDC, WBNB
+- Base (eip155:8453): USDC, WETH
+`;
+}
+
+// ============================================================================
+// Create Facilitator (mount routes on an Express app)
+// ============================================================================
+
+export function createFacilitator(app: Express, config: FacilitatorConfig): void {
+  const store = config.store ?? new InMemoryStore();
+  const settlement = new SettlementService(store, {
     treasuryAddress: config.treasuryAddress,
     settlementAddresses: config.settlementAddresses ?? {},
     publicClients: config.publicClients,
     walletClients: config.walletClients,
   });
 
-  // Security headers
-  app.use((_req: Request, res: Response, next: NextFunction) => {
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'DENY');
-    res.setHeader('X-XSS-Protection', '1; mode=block');
-    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
-    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'");
-    next();
-  });
-
-  // CORS middleware
-  if (config.cors !== false) {
-    const allowedOrigins = config.corsOrigins ?? '*';
-
-    app.use((req: Request, res: Response, next: NextFunction) => {
-      if (typeof allowedOrigins === 'string' && allowedOrigins === '*') {
-        res.setHeader('Access-Control-Allow-Origin', '*');
-      } else {
-        const origin = req.headers.origin;
-        const origins = Array.isArray(allowedOrigins) ? allowedOrigins : [allowedOrigins];
-        if (origin && origins.includes(origin)) {
-          res.setHeader('Access-Control-Allow-Origin', origin);
-          res.setHeader('Vary', 'Origin');
-        }
-      }
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Payment, X-Payment-Required, X-Payment-Response');
-      res.setHeader('Access-Control-Max-Age', '86400');
-      if (req.method === 'OPTIONS') {
-        res.sendStatus(204);
-        return;
-      }
-      next();
-    });
-  }
-
-  // Rate limiting (in-memory, per IP)
-  const rateLimitMax = config.rateLimitMax ?? 100;
-  const rateLimitWindowMs = config.rateLimitWindowMs ?? 60_000;
-  const rateLimitStore = new Map<string, { count: number; resetAt: number }>();
-
-  app.use((req: Request, res: Response, next: NextFunction) => {
-    const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown';
-    const now = Date.now();
-    const entry = rateLimitStore.get(ip);
-
-    if (!entry || now > entry.resetAt) {
-      rateLimitStore.set(ip, { count: 1, resetAt: now + rateLimitWindowMs });
-      res.setHeader('X-RateLimit-Limit', String(rateLimitMax));
-      res.setHeader('X-RateLimit-Remaining', String(rateLimitMax - 1));
-      next();
-      return;
-    }
-
-    entry.count++;
-    const remaining = Math.max(0, rateLimitMax - entry.count);
-    res.setHeader('X-RateLimit-Limit', String(rateLimitMax));
-    res.setHeader('X-RateLimit-Remaining', String(remaining));
-    res.setHeader('X-RateLimit-Reset', String(Math.ceil(entry.resetAt / 1000)));
-
-    if (entry.count > rateLimitMax) {
-      res.status(429).json({
-        error: 'RATE_LIMIT_EXCEEDED',
-        message: `Too many requests. Limit: ${rateLimitMax} per ${rateLimitWindowMs / 1000}s. Try again later.`,
-        retry_after: Math.ceil((entry.resetAt - now) / 1000),
-      });
-      return;
-    }
-
-    next();
-  });
-
-  // ========================================================================
-  // Health Check
-  // ========================================================================
-
-  app.get('/health', (_req: Request, res: Response) => {
-    res.json({
+  // --------------------------------------------------------------------------
+  // GET /health
+  // --------------------------------------------------------------------------
+  app.get('/health', (_req: Partial<Request>, res: Response) => {
+    res.status(200).json({
       status: 'healthy',
       service: 'wazabi-x402-facilitator',
-      version: '1.0.0',
       timestamp: new Date().toISOString(),
     });
   });
 
-  // ========================================================================
-  // POST /register — Create handle + deploy smart wallet
-  // ========================================================================
-
-  app.post('/register', async (req: Request, res: Response) => {
+  // --------------------------------------------------------------------------
+  // POST /x402/settle — Non-custodial x402 settlement
+  // --------------------------------------------------------------------------
+  app.post('/x402/settle', async (req: Partial<Request>, res: Response) => {
     try {
-      const parsed = RegisterRequestSchema.safeParse(req.body);
+      const parsed = PaymentPayloadSchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(400).json({
-          error: 'Invalid Request',
-          message: parsed.error.issues.map(i => i.message).join('; '),
-          details: parsed.error.issues,
+          error: 'INVALID_PAYLOAD',
+          details: parsed.error.issues.map(i => i.message),
         });
         return;
       }
 
-      const result = await handleService.register(parsed.data);
-
-      res.status(201).json(result);
-    } catch (error) {
-      if (error instanceof HandleError) {
-        const statusCode = error.code === 'HANDLE_TAKEN' ? 409 : 400;
-        res.status(statusCode).json({
-          error: error.code,
-          message: error.message,
-        });
-        return;
+      const result = await settlement.settleX402(parsed.data);
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof SettlementError) {
+        res.status(400).json({ error: err.code, message: err.message });
+      } else {
+        res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Settlement failed' });
       }
-      console.error('[facilitator] Registration error:', error);
-      res.status(500).json({
-        error: 'INTERNAL_ERROR',
-        message: 'Registration failed',
-      });
     }
   });
 
-  // ========================================================================
-  // GET /resolve/:handle — Handle → address lookup
-  // ========================================================================
-
-  app.get('/resolve/:handle', async (req: Request, res: Response) => {
-    try {
-      const handle = req.params['handle'];
-      if (!handle) {
-        res.status(400).json({ error: 'MISSING_HANDLE', message: 'Handle parameter required' });
-        return;
-      }
-
-      const result = await handleService.resolve(handle);
-      if (!result) {
-        res.status(404).json({
-          error: 'NOT_FOUND',
-          message: `Handle "${handle}" not found`,
-        });
-        return;
-      }
-
-      const response: ResolveResponse = result;
-      res.json(response);
-    } catch (error) {
-      console.error('[facilitator] Resolve error:', error);
-      res.status(500).json({
-        error: 'INTERNAL_ERROR',
-        message: 'Resolution failed',
-      });
-    }
-  });
-
-  // ========================================================================
-  // GET /balance/:handle — Token balances across chains
-  // ========================================================================
-
-  app.get('/balance/:handle', async (req: Request, res: Response) => {
-    try {
-      const handle = req.params['handle'];
-      if (!handle) {
-        res.status(400).json({ error: 'MISSING_HANDLE', message: 'Handle parameter required' });
-        return;
-      }
-
-      const profile = await handleService.getProfile(handle);
-      if (!profile) {
-        res.status(404).json({
-          error: 'NOT_FOUND',
-          message: `Handle "${handle}" not found`,
-        });
-        return;
-      }
-
-      // Group balances by network
-      const balances: Record<string, Record<string, string>> = {};
-      let totalUsd = 0;
-
-      for (const b of profile.balances) {
-        if (!balances[b.network]) {
-          balances[b.network] = {};
-        }
-        balances[b.network]![b.token] = b.balance;
-        totalUsd += parseFloat(b.balance); // Simplified: assume 1:1 USD for stablecoins
-      }
-
-      const response: BalanceResponse = {
-        handle: profile.agent.full_handle,
-        balances,
-        total_usd: totalUsd.toFixed(2),
-      };
-
-      res.json(response);
-    } catch (error) {
-      console.error('[facilitator] Balance error:', error);
-      res.status(500).json({
-        error: 'INTERNAL_ERROR',
-        message: 'Balance lookup failed',
-      });
-    }
-  });
-
-  // ========================================================================
-  // GET /history/:handle — Transaction history
-  // ========================================================================
-
-  app.get('/history/:handle', async (req: Request, res: Response) => {
-    try {
-      const handle = req.params['handle'];
-      if (!handle) {
-        res.status(400).json({ error: 'MISSING_HANDLE', message: 'Handle parameter required' });
-        return;
-      }
-
-      const limit = Math.min(Math.max(parseInt(req.query['limit'] as string) || 20, 1), 100);
-      const offset = Math.max(parseInt(req.query['offset'] as string) || 0, 0);
-
-      const result = await settlementService.getHistory(handle, limit, offset);
-      res.json(result);
-    } catch (error) {
-      if (error instanceof SettlementError) {
-        res.status(404).json({
-          error: error.code,
-          message: error.message,
-        });
-        return;
-      }
-      console.error('[facilitator] History error:', error);
-      res.status(500).json({
-        error: 'INTERNAL_ERROR',
-        message: 'History lookup failed',
-      });
-    }
-  });
-
-  // ========================================================================
-  // GET /profile/:handle — Full agent profile
-  // ========================================================================
-
-  app.get('/profile/:handle', async (req: Request, res: Response) => {
-    try {
-      const handle = req.params['handle'];
-      if (!handle) {
-        res.status(400).json({ error: 'MISSING_HANDLE', message: 'Handle parameter required' });
-        return;
-      }
-
-      const profile = await handleService.getProfile(handle);
-      if (!profile) {
-        res.status(404).json({
-          error: 'NOT_FOUND',
-          message: `Handle "${handle}" not found`,
-        });
-        return;
-      }
-
-      // Build balance map
-      const balances: Record<string, Record<string, string>> = {};
-      for (const b of profile.balances) {
-        if (!balances[b.network]) {
-          balances[b.network] = {};
-        }
-        balances[b.network]![b.token] = b.balance;
-      }
-
-      const response: ProfileResponse = {
-        handle: profile.agent.full_handle,
-        wallet_address: profile.agent.wallet_address,
-        networks: [...AGENT_SUPPORTED_NETWORKS],
-        created_at: profile.agent.created_at.toISOString(),
-        metadata: profile.agent.metadata,
-        balances,
-        total_transactions: profile.totalTransactions,
-      };
-
-      res.json(response);
-    } catch (error) {
-      console.error('[facilitator] Profile error:', error);
-      res.status(500).json({
-        error: 'INTERNAL_ERROR',
-        message: 'Profile lookup failed',
-      });
-    }
-  });
-
-  // ========================================================================
-  // GET /deployment/:handle — Wallet deployment status across networks
-  // ========================================================================
-
-  app.get('/deployment/:handle', async (req: Request, res: Response) => {
-    try {
-      const handle = req.params['handle'];
-      if (!handle) {
-        res.status(400).json({ error: 'MISSING_HANDLE', message: 'Handle parameter required' });
-        return;
-      }
-
-      const status = await handleService.getDeploymentStatus(handle);
-      res.json(status);
-    } catch (error) {
-      if (error instanceof HandleError) {
-        res.status(404).json({
-          error: error.code,
-          message: error.message,
-        });
-        return;
-      }
-      console.error('[facilitator] Deployment status error:', error);
-      res.status(500).json({
-        error: 'INTERNAL_ERROR',
-        message: 'Failed to check deployment status',
-      });
-    }
-  });
-
-  // ========================================================================
-  // POST /verify — Verify payment (x402 standard)
-  // ========================================================================
-
-  app.post('/verify', async (req: Request, res: Response) => {
+  // --------------------------------------------------------------------------
+  // POST /verify — Verify payment sender
+  // --------------------------------------------------------------------------
+  app.post('/verify', async (req: Partial<Request>, res: Response) => {
     try {
       const parsed = VerifyRequestSchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(400).json({
           error: 'INVALID_REQUEST',
-          message: parsed.error.issues.map(i => i.message).join('; '),
-          details: parsed.error.issues,
+          details: parsed.error.issues.map(i => i.message),
         });
         return;
       }
 
-      const result = await settlementService.verifyPayment(parsed.data);
-
-      res.json(result);
-    } catch (error) {
-      console.error('[facilitator] Verify error:', error);
-      res.status(500).json({
-        error: 'INTERNAL_ERROR',
-        message: 'Verification failed',
-      });
+      const result = await settlement.verifyPayment(parsed.data);
+      res.status(200).json(result);
+    } catch (err) {
+      res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Verification failed' });
     }
   });
 
-  // ========================================================================
-  // POST /x402/settle — Non-custodial x402 settlement via WazabiSettlement
-  // ========================================================================
-
-  app.post('/x402/settle', async (req: Request, res: Response) => {
+  // --------------------------------------------------------------------------
+  // GET /history/:address — Transaction history by address
+  // --------------------------------------------------------------------------
+  app.get('/history/:address', async (req: Partial<Request>, res: Response) => {
     try {
-      const parsed = PaymentPayloadSchema.safeParse(req.body);
-      if (!parsed.success) {
-        res.status(400).json({
-          error: 'INVALID_REQUEST',
-          message: parsed.error.issues.map(i => i.message).join('; '),
-          details: parsed.error.issues,
-        });
+      const address = (req.params as Record<string, string>)?.address;
+      if (!address || !isAddress(address)) {
+        res.status(400).json({ error: 'INVALID_ADDRESS', message: 'Provide a valid Ethereum address.' });
         return;
       }
 
-      const result = await settlementService.settleX402(parsed.data);
-      res.json(result);
-    } catch (error) {
-      if (error instanceof SettlementError) {
-        const statusCode = error.code === 'HANDLE_NOT_FOUND' ? 404 : 400;
-        res.status(statusCode).json({
-          error: error.code,
-          message: error.message,
-        });
-        return;
+      const query = (req.query ?? {}) as Record<string, string>;
+      const limit = parseInt(query.limit || '20');
+      const offset = parseInt(query.offset || '0');
+
+      const history = await settlement.getHistory(address, limit, offset);
+      res.status(200).json(history);
+    } catch (err) {
+      if (err instanceof SettlementError) {
+        res.status(400).json({ error: err.code, message: err.message });
+      } else {
+        res.status(500).json({ error: 'INTERNAL_ERROR' });
       }
-      console.error('[facilitator] x402 settle error:', error);
-      res.status(500).json({
-        error: 'INTERNAL_ERROR',
-        message: 'Settlement failed',
-      });
     }
   });
 
-  // ========================================================================
-  // GET /supported — Networks, tokens, schemes
-  // ========================================================================
-
-  app.get('/supported', (_req: Request, res: Response) => {
-    const networks = getSupportedNetworkIds().map(id => {
-      const networkConfig = SUPPORTED_NETWORKS[id];
-      return {
-        id,
-        name: networkConfig?.name ?? id,
-        tokens: Object.keys(networkConfig?.tokens ?? {}),
-      };
+  // --------------------------------------------------------------------------
+  // GET /supported — Available networks, tokens, and schemes
+  // --------------------------------------------------------------------------
+  app.get('/supported', (_req: Partial<Request>, res: Response) => {
+    res.status(200).json({
+      networks: [
+        { id: 'eip155:1', name: 'Ethereum', tokens: ['USDC', 'USDT', 'WETH'] },
+        { id: 'eip155:56', name: 'BNB Chain', tokens: ['USDT', 'USDC', 'WBNB'] },
+        { id: 'eip155:8453', name: 'Base', tokens: ['USDC', 'WETH'] },
+      ],
+      schemes: ['permit2', 'erc3009'],
+      fee_bps: SETTLEMENT_FEE_BPS,
+      fee_description: '0.5% protocol fee, split atomically on-chain',
     });
-
-    const response: SupportedResponse & { treasury_address: string } = {
-      networks,
-      handle_suffix: HANDLE_SUFFIX,
-      fee_rate: `${SETTLEMENT_FEE_BPS}bps (${SETTLEMENT_FEE_RATE * 100}%)`,
-      wallet_type: 'ERC-4337',
-      treasury_address: config.treasuryAddress,
-    };
-
-    res.json(response);
   });
 
-  // ========================================================================
+  // --------------------------------------------------------------------------
   // GET /skill.md — OpenClaw skill file
-  // ========================================================================
-
-  app.get('/skill.md', (req: Request, res: Response) => {
-    const headers = req.headers ?? {};
-    const proto = headers['x-forwarded-proto'] || req.protocol || 'https';
-    const host = headers['x-forwarded-host'] || headers.host || 'facilitator.wazabi.ai';
+  // --------------------------------------------------------------------------
+  app.get('/skill.md', (req: Partial<Request>, res: Response) => {
+    const host = (req.headers as Record<string, string>)?.host ?? 'facilitator.wazabi.ai';
+    const proto = (req.headers as Record<string, string>)?.['x-forwarded-proto'] ?? 'https';
     const baseUrl = `${proto}://${host}`;
     res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
-    res.send(buildSkillMd(baseUrl));
+    res.send(generateSkillMarkdown(baseUrl));
   });
 
-  // ========================================================================
-  // Portal Dashboard (static files)
-  // ========================================================================
-
+  // --------------------------------------------------------------------------
+  // Serve portal dashboard if configured
+  // --------------------------------------------------------------------------
   if (config.portalDir) {
-    const portalDir = resolve(config.portalDir);
-
-    const servePortalFile = (file: string) => (_req: Request, res: Response) => {
-      res.sendFile(join(portalDir, file), (err: Error | null) => {
-        if (err) {
-          res.status(404).json({ error: 'NOT_FOUND', message: 'File not found' });
-        }
-      });
-    };
-
-    app.get('/', servePortalFile('index.html'));
-    app.get('/favicon.svg', servePortalFile('favicon.svg'));
-    app.get('/styles/main.css', servePortalFile('styles/main.css'));
-    app.get('/scripts/main.js', servePortalFile('scripts/main.js'));
+    const express = require('express') as typeof import('express');
+    app.use('/', express.static(config.portalDir));
   }
 }
 
 // ============================================================================
-// OpenClaw SKILL.md Content (embedded)
+// Standalone Server
 // ============================================================================
 
-function buildSkillMd(baseUrl: string): string {
-  return `# Wazabi x402 Payment Skill
-
-## Description
-Enable your agent to send and receive payments using the Wazabi x402 protocol.
-Provides ERC-4337 smart wallet with gasless transactions on Ethereum, BNB Chain, and Base.
-
-## Setup
-To activate this skill, tell your agent:
-\`\`\`
-Register me for x402 payments with handle <your-handle>
-\`\`\`
-
-## API Base URL
-\`\`\`
-${baseUrl}
-\`\`\`
-
-## Commands
-
-### Register
-\`\`\`
-POST /register
-{
-  "handle": "<desired-handle>",
-  "networks": ["eip155:1", "eip155:56", "eip155:8453"]
-}
-\`\`\`
-Returns: wallet address, session key (store securely)
-
-### Check Balance
-\`\`\`
-GET /balance/<handle>.wazabi-x402
-\`\`\`
-
-### Send Payment
-\`\`\`
-POST /settle
-{
-  "from": "<your-handle>",
-  "to": "<recipient-handle-or-address>",
-  "amount": "10.00",
-  "token": "USDC",
-  "network": "eip155:8453"
-}
-\`\`\`
-Fee: 0.5% settlement fee applied automatically
-
-### View History
-\`\`\`
-GET /history/<handle>.wazabi-x402
-\`\`\`
-
-### Resolve Handle
-\`\`\`
-GET /resolve/<handle>.wazabi-x402
-\`\`\`
-
-## Auto-Payment (HTTP 402)
-When encountering an HTTP 402 response:
-1. Parse the X-Payment-Required header
-2. Check balance via GET /balance
-3. If sufficient, sign payment with session key
-4. POST /settle with payment details
-5. Retry original request
-
-## Supported Networks
-- Ethereum (eip155:1): USDC, USDT, WETH
-- BNB Chain (eip155:56): USDT, USDC, WBNB
-- Base (eip155:8453): USDC, WETH
-
-## Handle Format
-\`<name>.wazabi-x402\` — e.g., \`molty.wazabi-x402\`
-`;
-}
-
-// ============================================================================
-// Standalone Server Factory
-// ============================================================================
-
-/**
- * Create a standalone facilitator server
- *
- * @example
- * ```typescript
- * import { startFacilitator } from '@wazabiai/x402/facilitator';
- * startFacilitator(3000);
- * ```
- */
-export async function startFacilitator(
-  port: number = 3000,
-  config: FacilitatorConfig
-): Promise<void> {
-  // Dynamic import to keep express as optional peer dependency
-  const { default: express } = await import('express');
+export function startFacilitator(port: number, config: FacilitatorConfig): void {
+  const express = require('express') as typeof import('express');
   const app = express();
-
   app.use(express.json());
+
   createFacilitator(app, config);
 
   app.listen(port, () => {
-    console.log(`[wazabi-x402] Facilitator running on port ${port}`);
-    console.log(`[wazabi-x402] Health: http://localhost:${port}/health`);
-    console.log(`[wazabi-x402] Skill:  http://localhost:${port}/skill.md`);
-    if (config?.portalDir) {
-      console.log(`[wazabi-x402] Portal: http://localhost:${port}/`);
-    }
+    console.log(`[facilitator] Wazabi x402 Facilitator running on port ${port}`);
+    console.log(`[facilitator] Networks: ${SUPPORTED_NETWORK_IDS.join(', ')}`);
+    console.log(`[facilitator] Treasury: ${config.treasuryAddress}`);
   });
 }
