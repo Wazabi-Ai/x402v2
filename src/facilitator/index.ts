@@ -34,8 +34,6 @@ export type {
 } from './types.js';
 
 export {
-  SETTLEMENT_FEE_RATE,
-  SETTLEMENT_FEE_BPS,
   SUPPORTED_NETWORK_IDS,
   VerifyRequestSchema,
   isAddress,

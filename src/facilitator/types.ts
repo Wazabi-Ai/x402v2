@@ -1,22 +1,10 @@
 import { z } from 'zod';
+import { DEFAULT_FEE_BPS } from '../types/index.js';
 
 // ============================================================================
 // Constants
 // ============================================================================
 
-/**
- * Settlement fee rate (0.5% = 0.005)
- */
-export const SETTLEMENT_FEE_RATE = 0.005 as const;
-
-/**
- * Settlement fee basis points (50 = 0.5%)
- */
-export const SETTLEMENT_FEE_BPS = 50 as const;
-
-/**
- * Supported networks
- */
 export const SUPPORTED_NETWORK_IDS = ['eip155:1', 'eip155:56', 'eip155:8453'] as const;
 
 // ============================================================================
@@ -79,7 +67,8 @@ export interface SupportedResponse {
     name: string;
     tokens: string[];
   }>;
-  fee_rate: string;
+  fee_bps: number;
+  fee_description: string;
   schemes: string[];
 }
 
@@ -93,7 +82,7 @@ export function isAddress(value: string): boolean {
 
 export function calculateFee(amount: string): string {
   const amountNum = parseFloat(amount);
-  const fee = amountNum * SETTLEMENT_FEE_RATE;
+  const fee = amountNum * DEFAULT_FEE_BPS / 10000;
   return fee.toFixed(fee < 0.01 ? 6 : 2);
 }
 

@@ -12,14 +12,14 @@ import {
   BSC_TOKENS,
   BSC_TOKEN_BY_ADDRESS,
   BSC_NETWORK_CONFIG,
-  getTokenByAddress,
-  getTokenBySymbol,
-  isTokenSupported,
-  formatTokenAmount,
-  parseTokenAmount,
-  getTxUrl,
-  getAddressUrl,
-  getTokenUrl,
+  getBscTokenByAddress,
+  getBscTokenBySymbol,
+  isBscTokenSupported,
+  formatBscTokenAmount,
+  parseBscTokenAmount,
+  getBscTxUrl,
+  getBscAddressUrl,
+  getBscTokenUrl,
 } from '../src/chains/bnb.js';
 import {
   SUPPORTED_NETWORKS,
@@ -97,7 +97,7 @@ describe('Token Configurations', () => {
   describe('BSC_WBNB', () => {
     it('should have correct configuration', () => {
       expect(BSC_WBNB.address).toBe('0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c');
-      expect(BSC_WBNB.symbol).toBe('BNB');
+      expect(BSC_WBNB.symbol).toBe('WBNB');
       expect(BSC_WBNB.decimals).toBe(18);
     });
   });
@@ -164,59 +164,59 @@ describe('BSC_NETWORK_CONFIG', () => {
 // Token Lookup Functions Tests
 // ============================================================================
 
-describe('getTokenByAddress', () => {
+describe('getBscTokenByAddress', () => {
   it('should find token by exact address', () => {
-    expect(getTokenByAddress(BSC_USDT.address)).toEqual(BSC_USDT);
-    expect(getTokenByAddress(BSC_USDC.address)).toEqual(BSC_USDC);
+    expect(getBscTokenByAddress(BSC_USDT.address)).toEqual(BSC_USDT);
+    expect(getBscTokenByAddress(BSC_USDC.address)).toEqual(BSC_USDC);
   });
 
   it('should find token by lowercase address', () => {
-    expect(getTokenByAddress(BSC_USDT.address.toLowerCase())).toEqual(BSC_USDT);
+    expect(getBscTokenByAddress(BSC_USDT.address.toLowerCase())).toEqual(BSC_USDT);
   });
 
   it('should find token by uppercase address', () => {
-    expect(getTokenByAddress(BSC_USDT.address.toUpperCase())).toEqual(BSC_USDT);
+    expect(getBscTokenByAddress(BSC_USDT.address.toUpperCase())).toEqual(BSC_USDT);
   });
 
   it('should return undefined for unknown address', () => {
-    expect(getTokenByAddress('0x0000000000000000000000000000000000000000')).toBeUndefined();
+    expect(getBscTokenByAddress('0x0000000000000000000000000000000000000000')).toBeUndefined();
   });
 });
 
-describe('getTokenBySymbol', () => {
+describe('getBscTokenBySymbol', () => {
   it('should find token by symbol', () => {
-    expect(getTokenBySymbol('USDT')).toEqual(BSC_USDT);
-    expect(getTokenBySymbol('USDC')).toEqual(BSC_USDC);
-    expect(getTokenBySymbol('WBNB')).toEqual(BSC_WBNB);
+    expect(getBscTokenBySymbol('USDT')).toEqual(BSC_USDT);
+    expect(getBscTokenBySymbol('USDC')).toEqual(BSC_USDC);
+    expect(getBscTokenBySymbol('WBNB')).toEqual(BSC_WBNB);
   });
 
   it('should be case-insensitive', () => {
-    expect(getTokenBySymbol('usdt')).toEqual(BSC_USDT);
-    expect(getTokenBySymbol('Usdt')).toEqual(BSC_USDT);
-    expect(getTokenBySymbol('UsDt')).toEqual(BSC_USDT);
+    expect(getBscTokenBySymbol('usdt')).toEqual(BSC_USDT);
+    expect(getBscTokenBySymbol('Usdt')).toEqual(BSC_USDT);
+    expect(getBscTokenBySymbol('UsDt')).toEqual(BSC_USDT);
   });
 
   it('should return undefined for unknown symbol', () => {
-    expect(getTokenBySymbol('ETH')).toBeUndefined();
-    expect(getTokenBySymbol('DAI')).toBeUndefined();
+    expect(getBscTokenBySymbol('ETH')).toBeUndefined();
+    expect(getBscTokenBySymbol('DAI')).toBeUndefined();
   });
 });
 
-describe('isTokenSupported', () => {
+describe('isBscTokenSupported', () => {
   it('should return true for supported tokens', () => {
-    expect(isTokenSupported(BSC_USDT.address)).toBe(true);
-    expect(isTokenSupported(BSC_USDC.address)).toBe(true);
-    expect(isTokenSupported(BSC_WBNB.address)).toBe(true);
+    expect(isBscTokenSupported(BSC_USDT.address)).toBe(true);
+    expect(isBscTokenSupported(BSC_USDC.address)).toBe(true);
+    expect(isBscTokenSupported(BSC_WBNB.address)).toBe(true);
   });
 
   it('should be case-insensitive', () => {
-    expect(isTokenSupported(BSC_USDT.address.toLowerCase())).toBe(true);
-    expect(isTokenSupported(BSC_USDT.address.toUpperCase())).toBe(true);
+    expect(isBscTokenSupported(BSC_USDT.address.toLowerCase())).toBe(true);
+    expect(isBscTokenSupported(BSC_USDT.address.toUpperCase())).toBe(true);
   });
 
   it('should return false for unsupported tokens', () => {
-    expect(isTokenSupported('0x0000000000000000000000000000000000000000')).toBe(false);
-    expect(isTokenSupported('invalid')).toBe(false);
+    expect(isBscTokenSupported('0x0000000000000000000000000000000000000000')).toBe(false);
+    expect(isBscTokenSupported('invalid')).toBe(false);
   });
 });
 
@@ -224,74 +224,74 @@ describe('isTokenSupported', () => {
 // Amount Formatting Tests
 // ============================================================================
 
-describe('formatTokenAmount', () => {
+describe('formatBscTokenAmount', () => {
   it('should format whole amounts correctly', () => {
     // 1 token (18 decimals)
-    expect(formatTokenAmount('1000000000000000000', BSC_USDT.address)).toBe('1.00');
+    expect(formatBscTokenAmount('1000000000000000000', BSC_USDT.address)).toBe('1.00');
     // 10 tokens
-    expect(formatTokenAmount('10000000000000000000', BSC_USDT.address)).toBe('10.00');
+    expect(formatBscTokenAmount('10000000000000000000', BSC_USDT.address)).toBe('10.00');
     // 100 tokens
-    expect(formatTokenAmount('100000000000000000000', BSC_USDT.address)).toBe('100.00');
+    expect(formatBscTokenAmount('100000000000000000000', BSC_USDT.address)).toBe('100.00');
   });
 
   it('should format fractional amounts correctly', () => {
     // 1.5 tokens
-    expect(formatTokenAmount('1500000000000000000', BSC_USDT.address)).toBe('1.50');
+    expect(formatBscTokenAmount('1500000000000000000', BSC_USDT.address)).toBe('1.50');
     // 0.1 tokens
-    expect(formatTokenAmount('100000000000000000', BSC_USDT.address)).toBe('0.10');
+    expect(formatBscTokenAmount('100000000000000000', BSC_USDT.address)).toBe('0.10');
     // 0.01 tokens
-    expect(formatTokenAmount('10000000000000000', BSC_USDT.address)).toBe('0.01');
+    expect(formatBscTokenAmount('10000000000000000', BSC_USDT.address)).toBe('0.01');
   });
 
   it('should handle small fractions', () => {
     // 0.001 tokens - should trim trailing zeros but keep 2 decimals
-    expect(formatTokenAmount('1000000000000000', BSC_USDT.address)).toBe('0.001');
+    expect(formatBscTokenAmount('1000000000000000', BSC_USDT.address)).toBe('0.001');
     // Very small amount
-    expect(formatTokenAmount('1', BSC_USDT.address)).toBe('0.000000000000000001');
+    expect(formatBscTokenAmount('1', BSC_USDT.address)).toBe('0.000000000000000001');
   });
 
   it('should handle bigint input', () => {
-    expect(formatTokenAmount(BigInt('1000000000000000000'), BSC_USDT.address)).toBe('1.00');
+    expect(formatBscTokenAmount(BigInt('1000000000000000000'), BSC_USDT.address)).toBe('1.00');
   });
 
   it('should handle zero', () => {
-    expect(formatTokenAmount('0', BSC_USDT.address)).toBe('0.00');
+    expect(formatBscTokenAmount('0', BSC_USDT.address)).toBe('0.00');
   });
 
   it('should default to 18 decimals for unknown tokens', () => {
-    expect(formatTokenAmount('1000000000000000000', '0x0000000000000000000000000000000000000000')).toBe('1.00');
+    expect(formatBscTokenAmount('1000000000000000000', '0x0000000000000000000000000000000000000000')).toBe('1.00');
   });
 });
 
-describe('parseTokenAmount', () => {
+describe('parseBscTokenAmount', () => {
   it('should parse whole amounts correctly', () => {
-    expect(parseTokenAmount('1', BSC_USDT.address)).toBe(BigInt('1000000000000000000'));
-    expect(parseTokenAmount('10', BSC_USDT.address)).toBe(BigInt('10000000000000000000'));
-    expect(parseTokenAmount('100', BSC_USDT.address)).toBe(BigInt('100000000000000000000'));
+    expect(parseBscTokenAmount('1', BSC_USDT.address)).toBe(BigInt('1000000000000000000'));
+    expect(parseBscTokenAmount('10', BSC_USDT.address)).toBe(BigInt('10000000000000000000'));
+    expect(parseBscTokenAmount('100', BSC_USDT.address)).toBe(BigInt('100000000000000000000'));
   });
 
   it('should parse fractional amounts correctly', () => {
-    expect(parseTokenAmount('1.5', BSC_USDT.address)).toBe(BigInt('1500000000000000000'));
-    expect(parseTokenAmount('0.1', BSC_USDT.address)).toBe(BigInt('100000000000000000'));
-    expect(parseTokenAmount('0.01', BSC_USDT.address)).toBe(BigInt('10000000000000000'));
+    expect(parseBscTokenAmount('1.5', BSC_USDT.address)).toBe(BigInt('1500000000000000000'));
+    expect(parseBscTokenAmount('0.1', BSC_USDT.address)).toBe(BigInt('100000000000000000'));
+    expect(parseBscTokenAmount('0.01', BSC_USDT.address)).toBe(BigInt('10000000000000000'));
   });
 
   it('should handle amounts without decimal point', () => {
-    expect(parseTokenAmount('5', BSC_USDT.address)).toBe(BigInt('5000000000000000000'));
+    expect(parseBscTokenAmount('5', BSC_USDT.address)).toBe(BigInt('5000000000000000000'));
   });
 
   it('should truncate excess decimal places', () => {
     // More than 18 decimal places should be truncated
-    expect(parseTokenAmount('1.0000000000000000001', BSC_USDT.address)).toBe(BigInt('1000000000000000000'));
+    expect(parseBscTokenAmount('1.0000000000000000001', BSC_USDT.address)).toBe(BigInt('1000000000000000000'));
   });
 
-  it('should be inverse of formatTokenAmount', () => {
+  it('should be inverse of formatBscTokenAmount', () => {
     const testAmounts = ['1', '10.5', '0.123456789', '1000000'];
     for (const amount of testAmounts) {
-      const parsed = parseTokenAmount(amount, BSC_USDT.address);
-      const formatted = formatTokenAmount(parsed, BSC_USDT.address);
+      const parsed = parseBscTokenAmount(amount, BSC_USDT.address);
+      const formatted = formatBscTokenAmount(parsed, BSC_USDT.address);
       // Re-parse the formatted value and compare
-      const reparsed = parseTokenAmount(formatted, BSC_USDT.address);
+      const reparsed = parseBscTokenAmount(formatted, BSC_USDT.address);
       expect(reparsed).toBe(parsed);
     }
   });
@@ -301,23 +301,23 @@ describe('parseTokenAmount', () => {
 // URL Generation Tests
 // ============================================================================
 
-describe('getTxUrl', () => {
+describe('getBscTxUrl', () => {
   it('should generate correct transaction URL', () => {
     const txHash = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
-    expect(getTxUrl(txHash)).toBe(`https://bscscan.com/tx/${txHash}`);
+    expect(getBscTxUrl(txHash)).toBe(`https://bscscan.com/tx/${txHash}`);
   });
 });
 
-describe('getAddressUrl', () => {
+describe('getBscAddressUrl', () => {
   it('should generate correct address URL', () => {
     const address = '0x742d35Cc6634C0532925a3b844Bc9e7595f4b123';
-    expect(getAddressUrl(address)).toBe(`https://bscscan.com/address/${address}`);
+    expect(getBscAddressUrl(address)).toBe(`https://bscscan.com/address/${address}`);
   });
 });
 
-describe('getTokenUrl', () => {
+describe('getBscTokenUrl', () => {
   it('should generate correct token URL', () => {
-    expect(getTokenUrl(BSC_USDT.address)).toBe(`https://bscscan.com/token/${BSC_USDT.address}`);
+    expect(getBscTokenUrl(BSC_USDT.address)).toBe(`https://bscscan.com/token/${BSC_USDT.address}`);
   });
 });
 

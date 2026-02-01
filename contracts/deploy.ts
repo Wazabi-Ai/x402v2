@@ -48,7 +48,9 @@ async function main() {
   console.log(`\nDeployment saved to deployments/${networkName}.json`);
   console.log('\n=== DEPLOYMENT COMPLETE ===\n');
   console.log('Add these to your .env:');
-  console.log(`SETTLEMENT_${networkName.toUpperCase()}=${settlementAddress}`);
+  const networkEnvMap: Record<string, string> = { mainnet: 'ETH', bsc: 'BSC', base: 'BASE' };
+  const envSuffix = networkEnvMap[networkName] || networkName.toUpperCase();
+  console.log(`SETTLEMENT_${envSuffix}=${settlementAddress}`);
   console.log(`TREASURY_ADDRESS=${treasuryAddress}`);
 }
 

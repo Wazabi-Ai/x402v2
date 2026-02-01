@@ -29,7 +29,7 @@ export const DEFAULT_FEE_BPS = 50;
 // Network Configuration Types
 // ============================================================================
 
-export type TokenSymbol = 'USDT' | 'USDC' | 'BNB' | 'WETH' | 'ETH';
+export type TokenSymbol = 'USDT' | 'USDC' | 'WBNB' | 'WETH';
 
 export interface TokenConfig {
   address: `0x${string}`;
@@ -117,12 +117,6 @@ export const PERMIT2_BATCH_WITNESS_TYPES = {
     { name: 'feeBps', type: 'uint256' },
   ],
 } as const;
-
-/** Settlement witness struct (committed in payer's signature) */
-export interface SettlementWitness {
-  recipient: `0x${string}`;
-  feeBps: number;
-}
 
 // ============================================================================
 // ERC-3009 Types (for USDC transferWithAuthorization)

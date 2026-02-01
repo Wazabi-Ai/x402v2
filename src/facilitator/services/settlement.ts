@@ -19,8 +19,6 @@ import type { PublicClient, WalletClient } from 'viem';
 import type { InMemoryStore } from '../db/schema.js';
 import type { Transaction } from '../types.js';
 import {
-  SETTLEMENT_FEE_RATE,
-  SETTLEMENT_FEE_BPS,
   isAddress,
 } from '../types.js';
 import type {
@@ -29,6 +27,7 @@ import type {
   ERC3009Payload,
   PaymentResponse,
 } from '../../types/index.js';
+import { DEFAULT_FEE_BPS } from '../../types/index.js';
 
 // ============================================================================
 // WazabiSettlement Contract ABI (minimal)
@@ -169,7 +168,7 @@ export class SettlementService {
 
     const token = payload.scheme === 'permit2'
       ? payload.permit.permitted[0]!.token
-      : 'USDC';
+      : this.resolveERC3009Token(payload.network);
 
     const transaction: Transaction = {
       id: settlementId,
@@ -345,8 +344,8 @@ export class SettlementService {
 
   getFeeSchedule() {
     return {
-      rate: SETTLEMENT_FEE_RATE,
-      bps: SETTLEMENT_FEE_BPS,
+      rate: DEFAULT_FEE_BPS / 10000,
+      bps: DEFAULT_FEE_BPS,
       description: '0.5% settlement fee on every transaction',
       treasury: this.config.treasuryAddress,
     };

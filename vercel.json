@@ -1,9 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "name": "x402-protocol",
-  "buildCommand": "cd portal && npm install && npm run build",
-  "outputDirectory": "portal/dist",
-  "installCommand": "cd portal && npm install",
+  "buildCommand": "cd apps/portal && npm install && npm run build",
+  "outputDirectory": "apps/portal/dist",
+  "installCommand": "cd apps/portal && npm install",
   "framework": null,
   "rewrites": [
     { "source": "/(.*)", "destination": "/" }

@@ -3,9 +3,7 @@ import type { Express, Request, Response } from 'express';
 import type { PublicClient, WalletClient } from 'viem';
 import { InMemoryStore } from '../src/facilitator/db/schema.js';
 import { createFacilitator } from '../src/facilitator/server.js';
-import {
-  SETTLEMENT_FEE_BPS,
-} from '../src/facilitator/types.js';
+import { DEFAULT_FEE_BPS } from '../src/types/index.js';
 import type { Permit2Payload, ERC3009Payload } from '../src/types/index.js';
 
 // ============================================================================
@@ -348,7 +346,7 @@ describe('Facilitator Server', () => {
       const body = res._body as Record<string, unknown>;
       expect(body).toHaveProperty('networks');
       expect(body).toHaveProperty('schemes');
-      expect(body).toHaveProperty('fee_bps', SETTLEMENT_FEE_BPS);
+      expect(body).toHaveProperty('fee_bps', DEFAULT_FEE_BPS);
 
       const networks = (body as { networks: Array<{ id: string }> }).networks;
       const ids = networks.map(n => n.id);
