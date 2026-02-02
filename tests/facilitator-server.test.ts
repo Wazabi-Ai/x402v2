@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import type { Express, Request, Response } from 'express';
 import type { PublicClient, WalletClient } from 'viem';
 import { InMemoryStore } from '../src/facilitator/db/schema.js';
-import { createFacilitator } from '../src/facilitator/server.js';
+import { createFacilitator, RateLimiter } from '../src/facilitator/server.js';
 import { DEFAULT_FEE_BPS } from '../src/types/index.js';
 import type { Permit2Payload, ERC3009Payload } from '../src/types/index.js';
 
@@ -462,5 +462,65 @@ describe('Facilitator Server', () => {
 
       expect(res._statusCode).toBe(400);
     });
+  });
+
+  // ========================================================================
+  // Rate Limiting Tests
+  // ========================================================================
+
+  describe('POST /x402/settle (rate limiting)', () => {
+    it('should return 429 after exceeding rate limit', async () => {
+      const limitedMock = createMockApp();
+      createFacilitator(limitedMock.app, {
+        store: new InMemoryStore(),
+        cors: false,
+        rateLimitMax: 2,
+        ...mockClients,
+      });
+
+      const route = findRoute(limitedMock.routes, 'POST', '/x402/settle')!;
+
+      // First 2 requests should succeed (200)
+      for (let i = 0; i < 2; i++) {
+        const res = createMockResponse();
+        await route.handler({ body: buildPermit2Payload() }, res);
+        expect(res._statusCode).toBe(200);
+      }
+
+      // 3rd request should be rate limited (429)
+      const res = createMockResponse();
+      await route.handler({ body: buildPermit2Payload() }, res);
+      expect(res._statusCode).toBe(429);
+      const body = res._body as Record<string, unknown>;
+      expect(body).toHaveProperty('error', 'RATE_LIMITED');
+    });
+  });
+});
+
+// ============================================================================
+// RateLimiter Unit Tests
+// ============================================================================
+
+describe('RateLimiter', () => {
+  it('should allow requests within limit', () => {
+    const limiter = new RateLimiter(60_000, 3);
+    expect(limiter.isAllowed('ip1')).toBe(true);
+    expect(limiter.isAllowed('ip1')).toBe(true);
+    expect(limiter.isAllowed('ip1')).toBe(true);
+  });
+
+  it('should block requests exceeding limit', () => {
+    const limiter = new RateLimiter(60_000, 2);
+    expect(limiter.isAllowed('ip1')).toBe(true);
+    expect(limiter.isAllowed('ip1')).toBe(true);
+    expect(limiter.isAllowed('ip1')).toBe(false);
+  });
+
+  it('should track different keys independently', () => {
+    const limiter = new RateLimiter(60_000, 1);
+    expect(limiter.isAllowed('ip1')).toBe(true);
+    expect(limiter.isAllowed('ip2')).toBe(true);
+    expect(limiter.isAllowed('ip1')).toBe(false);
+    expect(limiter.isAllowed('ip2')).toBe(false);
   });
 });

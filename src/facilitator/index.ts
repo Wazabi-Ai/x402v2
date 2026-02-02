@@ -11,11 +11,12 @@ export {
   loadConfig,
   createClients,
   CHAIN_MAP,
+  KNOWN_SETTLEMENTS,
   type FacilitatorEnvConfig,
 } from './config.js';
 
 // Server & routes
-export { createFacilitator, startFacilitator, type FacilitatorConfig } from './server.js';
+export { createFacilitator, startFacilitator, RateLimiter, type FacilitatorConfig } from './server.js';
 
 // Services
 export { SettlementService, SettlementError } from './services/settlement.js';

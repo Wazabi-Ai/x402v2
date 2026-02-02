@@ -345,6 +345,56 @@ describe('SettlementService', () => {
   });
 
   // ==========================================================================
+  // settleX402 — Pre-flight validations
+  // ==========================================================================
+
+  describe('settleX402 (pre-flight validation)', () => {
+    it('should reject Permit2 with expired deadline', async () => {
+      const payload = buildPermit2Payload({
+        permit: {
+          permitted: [
+            { token: MOCK_TOKEN, amount: '9950000' },
+            { token: MOCK_TOKEN, amount: '50000' },
+          ],
+          nonce: '123456789',
+          deadline: Math.floor(Date.now() / 1000) - 60,
+        },
+      });
+      await expect(settlementService.settleX402(payload)).rejects.toThrow('expired');
+    });
+
+    it('should reject ERC-3009 with expired authorization', async () => {
+      const payload = buildERC3009Payload({
+        authorization: {
+          from: MOCK_PAYER,
+          to: MOCK_SETTLEMENT_ADDR,
+          value: '10000000',
+          validAfter: 0,
+          validBefore: Math.floor(Date.now() / 1000) - 60,
+          nonce: ('0x' + 'ab'.repeat(32)) as `0x${string}`,
+        },
+      });
+      await expect(settlementService.settleX402(payload)).rejects.toThrow('expired');
+    });
+
+    it('should reject Permit2 with feeBps exceeding max (1000)', async () => {
+      const payload = buildPermit2Payload({
+        witness: { recipient: MOCK_RECIPIENT, feeBps: 1500 },
+      });
+      await expect(settlementService.settleX402(payload)).rejects.toThrow('outside valid range');
+    });
+
+    it('should record calculated fee in transaction', async () => {
+      const payload = buildPermit2Payload();
+      await settlementService.settleX402(payload);
+
+      const { transactions } = await store.getTransactionsByAddress(MOCK_PAYER);
+      // gross = 10000000, feeBps = 50 → fee = 10000000 * 50 / 10000 = 50000
+      expect(transactions[0]?.fee).toBe('50000');
+    });
+  });
+
+  // ==========================================================================
   // settleX402 — Configuration errors
   // ==========================================================================
 
@@ -458,6 +508,33 @@ describe('SettlementService', () => {
 
       expect(result.valid).toBe(false);
       expect(result.error).toContain('not a valid');
+    });
+
+    it('should reject unconfigured network', async () => {
+      const result = await settlementService.verifyPayment({
+        from: MOCK_PAYER,
+        amount: '10.00',
+        token: 'USDC',
+        network: 'eip155:999',
+      });
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('not configured');
+    });
+
+    it('should return txCount from store', async () => {
+      // Settle a payment first so there's history
+      await settlementService.settleX402(buildPermit2Payload());
+
+      const result = await settlementService.verifyPayment({
+        from: MOCK_PAYER,
+        amount: '10.00',
+        token: 'USDC',
+        network: 'eip155:8453',
+      });
+
+      expect(result.valid).toBe(true);
+      expect(result.txCount).toBe(1);
     });
   });
 

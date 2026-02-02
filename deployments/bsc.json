@@ -1,0 +1,7 @@
+{
+  "network": "bsc",
+  "chainId": 56,
+  "caipId": "eip155:56",
+  "settlementAddress": "0x7c831477A025e05DbaB31ab91A792c1006beb0c6",
+  "blockExplorer": "https://bscscan.com/address/0x7c831477A025e05DbaB31ab91A792c1006beb0c6"
+}

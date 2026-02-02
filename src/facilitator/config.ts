@@ -16,6 +16,11 @@ export const CHAIN_MAP: Record<string, Chain> = {
   'eip155:8453': base,
 };
 
+/** Known deployed WazabiSettlement contract addresses */
+export const KNOWN_SETTLEMENTS: Record<string, `0x${string}`> = {
+  'eip155:56': '0x7c831477A025e05DbaB31ab91A792c1006beb0c6',
+};
+
 // ============================================================================
 // Environment Config
 // ============================================================================
@@ -48,7 +53,9 @@ function optionalAddress(name: string): `0x${string}` | undefined {
 }
 
 function buildSettlementAddresses(): Record<string, `0x${string}`> {
-  const result: Record<string, `0x${string}`> = {};
+  // Start with known deployed addresses as defaults
+  const result: Record<string, `0x${string}`> = { ...KNOWN_SETTLEMENTS };
+  // Environment variables override known defaults
   const entries: [string, string][] = [
     ['eip155:1', 'SETTLEMENT_ETH'],
     ['eip155:56', 'SETTLEMENT_BSC'],
