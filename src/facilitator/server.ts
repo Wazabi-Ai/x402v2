@@ -14,6 +14,49 @@ import { VerifyRequestSchema, SUPPORTED_NETWORK_IDS, isAddress } from './types.j
 import { PaymentPayloadSchema, DEFAULT_FEE_BPS } from '../types/index.js';
 
 // ============================================================================
+// Rate Limiter (sliding window, per-IP)
+// ============================================================================
+
+export class RateLimiter {
+  private readonly hits = new Map<string, { count: number; resetAt: number }>();
+  private readonly windowMs: number;
+  private readonly max: number;
+  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+  constructor(windowMs: number = 60_000, max: number = 60) {
+    this.windowMs = windowMs;
+    this.max = max;
+  }
+
+  isAllowed(key: string): boolean {
+    this.lazyStartCleanup();
+    const now = Date.now();
+    const entry = this.hits.get(key);
+
+    if (!entry || entry.resetAt <= now) {
+      this.hits.set(key, { count: 1, resetAt: now + this.windowMs });
+      return true;
+    }
+
+    entry.count++;
+    return entry.count <= this.max;
+  }
+
+  private lazyStartCleanup() {
+    if (this.cleanupTimer) return;
+    this.cleanupTimer = setInterval(() => {
+      const now = Date.now();
+      for (const [key, entry] of this.hits) {
+        if (entry.resetAt <= now) this.hits.delete(key);
+      }
+    }, this.windowMs);
+    if (this.cleanupTimer && typeof this.cleanupTimer === 'object' && 'unref' in this.cleanupTimer) {
+      (this.cleanupTimer as NodeJS.Timeout).unref();
+    }
+  }
+}
+
+// ============================================================================
 // Facilitator Config
 // ============================================================================
 
@@ -120,6 +163,8 @@ export function createFacilitator(app: Express, config: FacilitatorConfig): void
     walletClients: config.walletClients,
   });
 
+  const rateLimiter = new RateLimiter(60_000, config.rateLimitMax ?? 60);
+
   // --------------------------------------------------------------------------
   // GET /health
   // --------------------------------------------------------------------------
@@ -135,6 +180,18 @@ export function createFacilitator(app: Express, config: FacilitatorConfig): void
   // POST /x402/settle — Non-custodial x402 settlement
   // --------------------------------------------------------------------------
   app.post('/x402/settle', async (req: Partial<Request>, res: Response) => {
+    // Rate limiting: keyed by client IP
+    const clientKey = (req as Record<string, any>).ip ??
+                       (req as Record<string, any>).socket?.remoteAddress ??
+                       'unknown';
+    if (!rateLimiter.isAllowed(clientKey)) {
+      res.status(429).json({
+        error: 'RATE_LIMITED',
+        message: 'Too many requests. Try again later.',
+      });
+      return;
+    }
+
     try {
       const parsed = PaymentPayloadSchema.safeParse(req.body);
       if (!parsed.success) {

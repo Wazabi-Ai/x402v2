@@ -156,6 +156,36 @@ export class SettlementService {
       );
     }
 
+    // Pre-flight: validate deadline hasn't expired (saves gas on doomed txs)
+    const now = Math.floor(Date.now() / 1000);
+    if (payload.scheme === 'permit2') {
+      if (payload.permit.deadline <= now) {
+        throw new SettlementError(
+          `Permit2 deadline has expired (deadline: ${payload.permit.deadline}, now: ${now}).`,
+          'DEADLINE_EXPIRED'
+        );
+      }
+      if (payload.permit.permitted.length !== 2) {
+        throw new SettlementError(
+          `Permit2 permitted array must have exactly 2 entries (net + fee), got ${payload.permit.permitted.length}.`,
+          'INVALID_PAYLOAD'
+        );
+      }
+      if (payload.witness.feeBps < 0 || payload.witness.feeBps > 1000) {
+        throw new SettlementError(
+          `feeBps ${payload.witness.feeBps} outside valid range [0, 1000].`,
+          'INVALID_FEE'
+        );
+      }
+    } else {
+      if (payload.authorization.validBefore <= now) {
+        throw new SettlementError(
+          `ERC-3009 authorization has expired (validBefore: ${payload.authorization.validBefore}, now: ${now}).`,
+          'DEADLINE_EXPIRED'
+        );
+      }
+    }
+
     const settlementId = randomUUID();
     const payer = payload.payer;
     const recipient = payload.scheme === 'permit2'
@@ -170,6 +200,10 @@ export class SettlementService {
       ? payload.permit.permitted[0]!.token
       : this.resolveERC3009Token(payload.network);
 
+    // Calculate fee for the transaction record
+    const feeBps = payload.scheme === 'permit2' ? payload.witness.feeBps : DEFAULT_FEE_BPS;
+    const feeAmount = (BigInt(grossAmount) * BigInt(feeBps)) / BigInt(10000);
+
     const transaction: Transaction = {
       id: settlementId,
       from_address: payer,
@@ -177,7 +211,7 @@ export class SettlementService {
       amount: grossAmount,
       token,
       network,
-      fee: '0',
+      fee: feeAmount.toString(),
       gas_cost: '0',
       tx_hash: null,
       status: 'pending',
@@ -226,6 +260,10 @@ export class SettlementService {
     settlementAddress: `0x${string}`,
     walletClient: WalletClient
   ): Promise<`0x${string}`> {
+    if (!walletClient.account || !walletClient.chain) {
+      throw new SettlementError('Wallet client not properly configured.', 'WALLET_NOT_CONFIGURED');
+    }
+
     const permit = {
       permitted: payload.permit.permitted.map(p => ({
         token: p.token as `0x${string}`,
@@ -245,8 +283,8 @@ export class SettlementService {
       abi: wazabiSettlementAbi,
       functionName: 'settle',
       args: [permit, payload.payer as `0x${string}`, witness, payload.signature as `0x${string}`],
-      account: walletClient.account!,
-      chain: walletClient.chain!,
+      account: walletClient.account,
+      chain: walletClient.chain,
     });
   }
 
@@ -255,6 +293,10 @@ export class SettlementService {
     settlementAddress: `0x${string}`,
     walletClient: WalletClient
   ): Promise<`0x${string}`> {
+    if (!walletClient.account || !walletClient.chain) {
+      throw new SettlementError('Wallet client not properly configured.', 'WALLET_NOT_CONFIGURED');
+    }
+
     const { v, r, s } = splitSignature(payload.signature);
     const tokenAddress = this.resolveERC3009Token(payload.network);
 
@@ -272,8 +314,8 @@ export class SettlementService {
         payload.authorization.nonce as `0x${string}`,
         v, r, s,
       ],
-      account: walletClient.account!,
-      chain: walletClient.chain!,
+      account: walletClient.account,
+      chain: walletClient.chain,
     });
   }
 
@@ -335,11 +377,18 @@ export class SettlementService {
     amount: string;
     token: string;
     network: string;
-  }): Promise<{ valid: boolean; signer?: string; error?: string }> {
+  }): Promise<{ valid: boolean; signer?: string; error?: string; txCount?: number }> {
     if (!isAddress(params.from)) {
       return { valid: false, error: `"${params.from}" is not a valid Ethereum address.` };
     }
-    return { valid: true, signer: params.from };
+
+    if (!this.config.publicClients[params.network]) {
+      return { valid: false, error: `Network "${params.network}" is not configured.` };
+    }
+
+    const { total } = await this.store.getTransactionsByAddress(params.from, 1, 0);
+
+    return { valid: true, signer: params.from, txCount: total };
   }
 
   getFeeSchedule() {
