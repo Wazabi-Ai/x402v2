@@ -4,9 +4,15 @@
  * A thin settlement relay for the x402 payment protocol.
  * Receives signed Permit2/ERC-3009 payloads from payers and submits them on-chain.
  * The facilitator pays gas but cannot redirect funds (non-custodial).
+ *
+ * Authentication follows the Coinbase x402 pattern:
+ * - Protected endpoints (/x402/settle, /verify) require Bearer token when apiKeys is set
+ * - Public endpoints (/health, /supported, /skill.md) are always open
+ * - Payments are self-authenticating via cryptographic signatures; API key auth
+ *   provides service-level access control
  */
 
-import type { Express, Request, Response } from 'express';
+import type { Express, Request, Response, NextFunction } from 'express';
 import type { PublicClient, WalletClient } from 'viem';
 import { InMemoryStore } from './db/schema.js';
 import { SettlementService, SettlementError } from './services/settlement.js';
@@ -69,13 +75,57 @@ export interface FacilitatorConfig {
   cors?: boolean;
   rateLimitMax?: number;
   portalDir?: string;
+  /**
+   * Optional API keys for authenticating requests to protected endpoints.
+   * When set, /x402/settle and /verify require a valid
+   * `Authorization: Bearer <key>` header. Public endpoints (/health,
+   * /supported, /skill.md) remain unauthenticated.
+   *
+   * Follows the Coinbase x402 facilitator auth pattern.
+   */
+  apiKeys?: string[];
+}
+
+// ============================================================================
+// API Key Auth Middleware
+// ============================================================================
+
+function createApiKeyAuth(apiKeys: string[]) {
+  const keySet = new Set(apiKeys);
+
+  return (req: Partial<Request>, res: Response, next: NextFunction): void => {
+    const authHeader = (req.headers as Record<string, string | undefined>)?.authorization;
+
+    if (!authHeader) {
+      res.status(401).json({
+        error: 'UNAUTHORIZED',
+        message: 'Missing Authorization header. Use: Authorization: Bearer <api-key>',
+      });
+      return;
+    }
+
+    const match = authHeader.match(/^Bearer\s+(.+)$/i);
+    if (!match?.[1] || !keySet.has(match[1])) {
+      res.status(403).json({
+        error: 'FORBIDDEN',
+        message: 'Invalid API key.',
+      });
+      return;
+    }
+
+    next();
+  };
 }
 
 // ============================================================================
 // Skill file generator
 // ============================================================================
 
-function generateSkillMarkdown(baseUrl: string): string {
+function generateSkillMarkdown(baseUrl: string, authRequired: boolean): string {
+  const authNote = authRequired
+    ? `\n## Authentication\nProtected endpoints require \`Authorization: Bearer <api-key>\` header.\nPublic endpoints (/health, /supported) do not require authentication.\n`
+    : '';
+
   return `# Wazabi x402 Facilitator
 
 ## Overview
@@ -83,7 +133,7 @@ Non-custodial settlement relay for the x402 payment protocol. Submit signed Perm
 
 ## Base URL
 ${baseUrl}
-
+${authNote}
 ## Endpoints
 
 ### POST /x402/settle
@@ -164,22 +214,27 @@ export function createFacilitator(app: Express, config: FacilitatorConfig): void
   });
 
   const rateLimiter = new RateLimiter(60_000, config.rateLimitMax ?? 60);
+  const authRequired = Array.isArray(config.apiKeys) && config.apiKeys.length > 0;
+  const authMiddleware = authRequired
+    ? createApiKeyAuth(config.apiKeys!)
+    : (_req: Partial<Request>, _res: Response, next: NextFunction) => next();
 
   // --------------------------------------------------------------------------
-  // GET /health
+  // GET /health (public)
   // --------------------------------------------------------------------------
   app.get('/health', (_req: Partial<Request>, res: Response) => {
     res.status(200).json({
       status: 'healthy',
       service: 'wazabi-x402-facilitator',
+      authRequired,
       timestamp: new Date().toISOString(),
     });
   });
 
   // --------------------------------------------------------------------------
-  // POST /x402/settle — Non-custodial x402 settlement
+  // POST /x402/settle — Non-custodial x402 settlement (protected)
   // --------------------------------------------------------------------------
-  app.post('/x402/settle', async (req: Partial<Request>, res: Response) => {
+  app.post('/x402/settle', authMiddleware, async (req: Partial<Request>, res: Response) => {
     // Rate limiting: keyed by client IP
     const clientKey = (req as Record<string, any>).ip ??
                        (req as Record<string, any>).socket?.remoteAddress ??
@@ -214,9 +269,9 @@ export function createFacilitator(app: Express, config: FacilitatorConfig): void
   });
 
   // --------------------------------------------------------------------------
-  // POST /verify — Verify payment sender
+  // POST /verify — Verify payment sender (protected)
   // --------------------------------------------------------------------------
-  app.post('/verify', async (req: Partial<Request>, res: Response) => {
+  app.post('/verify', authMiddleware, async (req: Partial<Request>, res: Response) => {
     try {
       const parsed = VerifyRequestSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -261,7 +316,7 @@ export function createFacilitator(app: Express, config: FacilitatorConfig): void
   });
 
   // --------------------------------------------------------------------------
-  // GET /supported — Available networks, tokens, and schemes
+  // GET /supported — Available networks, tokens, and schemes (public)
   // --------------------------------------------------------------------------
   app.get('/supported', (_req: Partial<Request>, res: Response) => {
     res.status(200).json({
@@ -277,14 +332,14 @@ export function createFacilitator(app: Express, config: FacilitatorConfig): void
   });
 
   // --------------------------------------------------------------------------
-  // GET /skill.md — OpenClaw skill file
+  // GET /skill.md — OpenClaw skill file (public)
   // --------------------------------------------------------------------------
   app.get('/skill.md', (req: Partial<Request>, res: Response) => {
     const host = (req.headers as Record<string, string>)?.host ?? 'facilitator.wazabi.ai';
     const proto = (req.headers as Record<string, string>)?.['x-forwarded-proto'] ?? 'https';
     const baseUrl = `${proto}://${host}`;
     res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
-    res.send(generateSkillMarkdown(baseUrl));
+    res.send(generateSkillMarkdown(baseUrl, authRequired));
   });
 
   // --------------------------------------------------------------------------
@@ -307,9 +362,11 @@ export function startFacilitator(port: number, config: FacilitatorConfig): void 
 
   createFacilitator(app, config);
 
+  const authMode = config.apiKeys?.length ? 'API key auth enabled' : 'no auth (public)';
   app.listen(port, () => {
     console.log(`[facilitator] Wazabi x402 Facilitator running on port ${port}`);
     console.log(`[facilitator] Networks: ${SUPPORTED_NETWORK_IDS.join(', ')}`);
     console.log(`[facilitator] Treasury: ${config.treasuryAddress}`);
+    console.log(`[facilitator] Auth: ${authMode}`);
   });
 }

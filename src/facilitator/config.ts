@@ -32,6 +32,10 @@ export interface FacilitatorEnvConfig {
   rpcUrls: Record<string, string>;
   port: number;
   portalDir: string;
+  /** API keys for authenticating protected endpoints (comma-separated in env) */
+  apiKeys: string[];
+  /** PostgreSQL connection string (if omitted, uses in-memory store) */
+  databaseUrl: string | null;
 }
 
 function requireEnv(name: string): string {
@@ -74,6 +78,13 @@ export function loadConfig(): FacilitatorEnvConfig {
     treasuryPrivateKey.startsWith('0x') ? treasuryPrivateKey : `0x${treasuryPrivateKey}`
   );
 
+  // Parse comma-separated API keys (empty string → no auth)
+  const apiKeysRaw = process.env['FACILITATOR_API_KEYS'] ?? '';
+  const apiKeys = apiKeysRaw
+    .split(',')
+    .map(k => k.trim())
+    .filter(k => k.length > 0);
+
   return {
     treasuryAddress: account.address,
     treasuryPrivateKey: treasuryPrivateKey.startsWith('0x') ? treasuryPrivateKey : `0x${treasuryPrivateKey}`,
@@ -85,6 +96,8 @@ export function loadConfig(): FacilitatorEnvConfig {
     },
     port: parseInt(optionalEnv('PORT', '3000')),
     portalDir: optionalEnv('PORTAL_DIR', 'apps/facilitator-portal'),
+    apiKeys,
+    databaseUrl: process.env['DATABASE_URL'] ?? null,
   };
 }
 

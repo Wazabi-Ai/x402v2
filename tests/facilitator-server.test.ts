@@ -145,15 +145,32 @@ function createMockResponse(): MockResponse {
   return res;
 }
 
+/**
+ * Chain Express-style middleware handlers into a single handler.
+ * Supports `app.post(path, middleware, handler)` patterns used by auth middleware.
+ */
+function chainHandlers(...handlers: Array<MockRoute['handler']>): MockRoute['handler'] {
+  return async (req, res) => {
+    let index = 0;
+    const next = () => {
+      index++;
+      if (index < handlers.length) {
+        return (handlers[index] as any)(req, res, next);
+      }
+    };
+    await (handlers[0] as any)(req, res, next);
+  };
+}
+
 function createMockApp(): { app: Express; routes: MockRoute[] } {
   const routes: MockRoute[] = [];
 
   const app = {
-    get(path: string, handler: MockRoute['handler']) {
-      routes.push({ method: 'GET', path, handler });
+    get(path: string, ...handlers: Array<MockRoute['handler']>) {
+      routes.push({ method: 'GET', path, handler: handlers.length === 1 ? handlers[0]! : chainHandlers(...handlers) });
     },
-    post(path: string, handler: MockRoute['handler']) {
-      routes.push({ method: 'POST', path, handler });
+    post(path: string, ...handlers: Array<MockRoute['handler']>) {
+      routes.push({ method: 'POST', path, handler: handlers.length === 1 ? handlers[0]! : chainHandlers(...handlers) });
     },
     use(pathOrHandler: string | MockRoute['handler'], maybeHandler?: MockRoute['handler']) {
       if (typeof pathOrHandler === 'function') {

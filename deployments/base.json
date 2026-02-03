@@ -1,0 +1,9 @@
+{
+  "network": "base",
+  "chainId": 8453,
+  "caipId": "eip155:8453",
+  "settlementAddress": null,
+  "status": "pending",
+  "deployCommand": "npx hardhat run contracts/deploy.ts --network base",
+  "notes": "Requires TREASURY_PRIVATE_KEY with funded ETH on Base"
+}

@@ -23,7 +23,8 @@ export { SettlementService, SettlementError } from './services/settlement.js';
 export type { SettlementConfig } from './services/settlement.js';
 
 // Database
-export { InMemoryStore, CREATE_ALL_TABLES } from './db/schema.js';
+export { InMemoryStore, PostgresStore, CREATE_ALL_TABLES } from './db/schema.js';
+export type { DataStore } from './db/schema.js';
 
 // Types
 export type {

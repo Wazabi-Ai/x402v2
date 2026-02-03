@@ -10,6 +10,7 @@ import {
   type PaymentResponse,
   type X402MiddlewareConfig,
   type PaymentScheme,
+  type FacilitatorEndpointConfig,
   PaymentPayloadSchema,
   X402_HEADERS,
   X402_VERSION,
@@ -231,9 +232,13 @@ export function x402Middleware(config: X402MiddlewareConfig): RequestHandler {
         return;
       }
 
+      // Resolve facilitator config: `facilitator` takes precedence over `facilitatorUrl`
+      const resolvedFacilitator: FacilitatorEndpointConfig | null =
+        config.facilitator ?? (facilitatorUrl ? { url: facilitatorUrl } : null);
+
       // Forward to facilitator for on-chain settlement
-      if (facilitatorUrl) {
-        const settlementResult = await settleWithFacilitator(payload, facilitatorUrl);
+      if (resolvedFacilitator) {
+        const settlementResult = await settleWithFacilitator(payload, resolvedFacilitator);
 
         if (!settlementResult.success) {
           res.status(402).json({
@@ -286,15 +291,19 @@ export function x402Middleware(config: X402MiddlewareConfig): RequestHandler {
 
 async function settleWithFacilitator(
   payload: PaymentPayload,
-  facilitatorUrl: string
+  facilitator: FacilitatorEndpointConfig
 ): Promise<PaymentResponse> {
   try {
+    const authHeaders = facilitator.createAuthHeaders
+      ? await facilitator.createAuthHeaders()
+      : {};
+
     const response = await axios.post<PaymentResponse>(
-      `${facilitatorUrl}/x402/settle`,
+      `${facilitator.url}/x402/settle`,
       payload,
       {
         timeout: 30000,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
       }
     );
 
@@ -405,6 +414,9 @@ export {
   type PaymentPayload,
   type PaymentResponse,
   type PaymentVerificationResult,
+  type FacilitatorEndpointConfig,
+  type CreateAuthHeaders,
+  createFacilitatorEndpointConfig,
   X402_HEADERS,
   PaymentVerificationError,
   PaymentExpiredError,

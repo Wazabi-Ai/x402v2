@@ -1,0 +1,9 @@
+{
+  "network": "mainnet",
+  "chainId": 1,
+  "caipId": "eip155:1",
+  "settlementAddress": null,
+  "status": "pending",
+  "deployCommand": "npx hardhat run contracts/deploy.ts --network mainnet",
+  "notes": "Requires TREASURY_PRIVATE_KEY with funded ETH account"
+}

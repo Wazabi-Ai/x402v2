@@ -258,6 +258,61 @@ export interface PaymentVerificationResult {
   payload?: PaymentPayload;
 }
 
+// ============================================================================
+// Facilitator Configuration (Coinbase x402-compatible)
+// ============================================================================
+
+/** Function that returns auth headers for facilitator requests */
+export type CreateAuthHeaders = () => Promise<Record<string, string>> | Record<string, string>;
+
+/**
+ * Facilitator endpoint configuration.
+ *
+ * Follows the Coinbase x402 pattern: the facilitator URL is paired with an
+ * optional `createAuthHeaders` function that returns Authorization headers.
+ *
+ * @example
+ * ```typescript
+ * // Public facilitator (no auth)
+ * const facilitator = { url: 'https://x402.org/facilitator' };
+ *
+ * // Authenticated facilitator (API key)
+ * const facilitator = {
+ *   url: 'https://facilitator.wazabi.ai',
+ *   createAuthHeaders: async () => ({
+ *     Authorization: `Bearer ${process.env.FACILITATOR_API_KEY}`,
+ *   }),
+ * };
+ * ```
+ */
+export interface FacilitatorEndpointConfig {
+  /** Facilitator URL */
+  url: string;
+  /** Optional function that returns auth headers for facilitator requests */
+  createAuthHeaders?: CreateAuthHeaders;
+}
+
+/**
+ * Create a facilitator config from API key credentials.
+ * Convenience wrapper matching the Coinbase x402 pattern.
+ */
+export function createFacilitatorEndpointConfig(
+  url: string,
+  apiKeyId?: string,
+  apiKeySecret?: string
+): FacilitatorEndpointConfig {
+  if (!apiKeyId || !apiKeySecret) {
+    return { url };
+  }
+  return {
+    url,
+    createAuthHeaders: () => ({
+      Authorization: `Bearer ${apiKeySecret}`,
+      'X-API-Key-Id': apiKeyId,
+    }),
+  };
+}
+
 export interface X402MiddlewareConfig {
   /** Payment recipient address */
   recipientAddress: `0x${string}`;
@@ -271,8 +326,16 @@ export interface X402MiddlewareConfig {
   treasuryAddress: `0x${string}`;
   /** Fee rate in basis points (default: 50 = 0.5%) */
   feeBps?: number;
-  /** Facilitator URL for settlement */
+  /**
+   * Facilitator URL for settlement (simple form).
+   * For authenticated facilitators, use `facilitator` instead.
+   */
   facilitatorUrl?: string;
+  /**
+   * Facilitator config with optional auth headers (Coinbase x402-compatible).
+   * Takes precedence over `facilitatorUrl` if both are provided.
+   */
+  facilitator?: FacilitatorEndpointConfig;
   /** Description of the paid resource */
   description?: string;
   /** CAIP-2 network ID (default: 'eip155:8453') */
